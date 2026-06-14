@@ -22,7 +22,7 @@ router.get('/', verifyToken, async (req, res) => {
     if (prioridade) { conditions.push('t.prioridade = ?'); params.push(prioridade); }
     
     if (conditions.length > 0) { queryText += ' WHERE ' + conditions.join(' AND '); }
-    queryText += ' ORDER BY t.prioridade DESC, t.data_entrada DESC';
+    queryText += ' ORDER BY t.prioridade DESC, t.prazo_entrega ASC';
 
     const result = await all(queryText, params);
     res.json(result);
@@ -64,7 +64,7 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo trabalho (SISTEMA INTEGRADO E BLINDADO)
+// Criar novo trabalho com Etapas Dinâmicas
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
@@ -80,96 +80,108 @@ router.post('/', verifyToken, async (req, res) => {
       custo_operacional,
       forma_pagamento, 
       resumo_trabalho, 
-      observacoes 
+      observacoes,
+      etapas
     } = req.body;
 
-    // Validação de segurança dos campos textuais obrigatórios
     if (!paciente_nome || !dentista_nome || !procedimento || !valor_bruto) {
-      return res.status(400).json({ error: 'Campos obrigatórios: paciente_nome, dentista_nome, procedimento, valor_bruto' });
+      return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
     }
 
-    // 1. Verificar ou Criar o Paciente dinamicamente
+    // Find or Create Paciente
     let paciente = await get('SELECT id FROM pacientes WHERE nome = ?', [paciente_nome.trim()]);
-    let paciente_id;
-    if (paciente) {
-      paciente_id = paciente.id;
-    } else {
-      const resPac = await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()]);
-      paciente_id = resPac.lastID;
-    }
+    let paciente_id = paciente ? paciente.id : (await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()])).lastID;
 
-    // 2. Verificar ou Criar o Dentista dinamicamente
+    // Find or Create Dentista
     let dentista = await get('SELECT id FROM dentistas WHERE nome = ?', [dentista_nome.trim()]);
-    let dentista_id;
-    if (dentista) {
-      dentista_id = dentista.id;
-    } else {
-      const resDent = await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()]);
-      dentista_id = resDent.lastID;
-    }
+    let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
 
-    // Cálculos financeiros para gravação direta
     const vb = parseFloat(valor_bruto) || 0;
     const co = parseFloat(custo_operacional) || 0;
     const lucro_liquido = vb - co;
 
-    // 3. Inserir o Serviço final com os relacionamentos perfeitos
     const result = await query(
       `INSERT INTO trabalhos (
         paciente_id, dentista_id, tipo_protese_id, descricao, procedimento, 
         data_entrada, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
-        lucro_liquido, forma_pagamento, resumo_trabalho, observacoes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        lucro_liquido, forma_pagamento, resumo_trabalho, observacoes, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        paciente_id,
-        dentista_id,
-        tipo_protese_id || null,
-        descricao || 'Sem descrição complementar',
-        procedimento,
-        data_entrada || new Date().toISOString().split('T')[0],
-        prazo_entrega || null,
-        prioridade || 'normal',
-        vb,
-        co,
-        lucro_liquido,
-        forma_pagamento || null,
-        resumo_trabalho || null, 
-        observacoes || null      
+        paciente_id, dentista_id, tipo_protese_id || null, descricao || '', procedimento,
+        data_entrada || new Date().toISOString().split('T')[0], prazo_entrega || null,
+        prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
+        resumo_trabalho || null, observacoes || null, 'Pendente'
       ]
     );
 
-    res.status(201).json({
-      message: 'Trabalho criado com sucesso',
-      id: result.lastID
-    });
+    const trabalhoId = result.lastID;
+
+    // Gravar etapas vinculadas se existirem
+    if (etapas && Array.isArray(etapas)) {
+      for (let i = 0; i < etapas.length; i++) {
+        if (etapas[i].nome?.trim()) {
+          await query(
+            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+            [trabalhoId, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
+          );
+        }
+      }
+    }
+
+    res.status(201).json({ message: 'Trabalho criado com sucesso', id: trabalhoId });
   } catch (error) {
     console.error('Erro ao criar trabalho:', error);
     res.status(500).json({ error: 'Erro interno ao criar trabalho' });
   }
 });
 
-// Atualizar trabalho
+// Atualizar trabalho (Garante salvamento completo de etapas e prazos)
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { descricao, procedimento, data_saida, status, valor_bruto, custo_operacional, prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, observacoes } = req.body;
+    const { 
+      descricao, procedimento, status, valor_bruto, custo_operacional, 
+      prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
+      observacoes, etapas 
+    } = req.body;
 
     const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
     if (!trabalho) {
       return res.status(404).json({ error: 'Trabalho não encontrado' });
     }
 
-    const vb = valor_bruto || trabalho.valor_bruto;
-    const co = custo_operacional || trabalho.custo_operacional;
+    const vb = valor_bruto !== undefined ? parseFloat(valor_bruto) : trabalho.valor_bruto;
+    const co = custo_operacional !== undefined ? parseFloat(custo_operacional) : trabalho.custo_operacional;
     const lucro_liquido = vb - co;
 
     await query(
-      `UPDATE trabalhos SET descricao = ?, procedimento = ?, data_saida = ?, status = ?, valor_bruto = ?, custo_operacional = ?, lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
+      `UPDATE trabalhos SET 
+        descricao = ?, procedimento = ?, status = ?, valor_bruto = ?, custo_operacional = ?, 
+        lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, 
+        resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
-      [descricao || trabalho.descricao, procedimento || trabalho.procedimento, data_saida || trabalho.data_saida, status || trabalho.status, vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade, forma_pagamento || trabalho.forma_pagamento, resumo_trabalho || trabalho.resumo_trabalho, observacoes || trabalho.observacoes, id]
+      [
+        descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
+        vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
+        forma_pagamento || trabalho.forma_pagamento, resumo_trabalho || trabalho.resumo_trabalho,
+        observacoes || trabalho.observacoes, id
+      ]
     );
 
-    res.json({ message: 'Trabalho updated com sucesso' });
+    // Sincronizar etapas: remove as antigas e insere o novo estado enviado pelo front
+    if (etapas && Array.isArray(etapas)) {
+      await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
+      for (let i = 0; i < etapas.length; i++) {
+        if (etapas[i].nome?.trim()) {
+          await query(
+            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+            [id, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
+          );
+        }
+      }
+    }
+
+    res.json({ message: 'Trabalho atualizado com sucesso' });
   } catch (error) {
     console.error('Erro ao atualizar trabalho:', error);
     res.status(500).json({ error: 'Erro ao atualizar trabalho' });
@@ -180,11 +192,8 @@ router.put('/:id', verifyToken, async (req, res) => {
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
     const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
-    if (!trabalho) {
-      return res.status(404).json({ error: 'Trabalho não encontrado' });
-    }
+    if (!trabalho) return res.status(404).json({ error: 'Trabalho não encontrado' });
 
     await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM custos WHERE trabalho_id = ?', [id]);
@@ -193,7 +202,6 @@ router.delete('/:id', verifyToken, async (req, res) => {
 
     res.json({ message: 'Trabalho deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar trabalho:', error);
     res.status(500).json({ error: 'Erro ao deletar trabalho' });
   }
 });
