@@ -1,24 +1,12 @@
 import express from 'express';
-import { all, get, query } from '../database/database.js';
+import { all, get } from '../database/database.js';
 import { verifyToken } from './auth.js';
 
 const router = express.Router();
 
-// ==============================================================================
-// 🛠️ AUTO-CORREÇÃO DO BANCO DE DADOS
-// Garante que as colunas novas existem antes de tentar buscar os dados
-// ==============================================================================
-const garantirColunas = async () => {
-  try { await query("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch (e) {}
-  try { await query("ALTER TABLE trabalhos ADD COLUMN forma_pagamento TEXT"); } catch (e) {}
-  try { await query("ALTER TABLE custos ADD COLUMN nome TEXT"); } catch (e) {}
-};
-
 // Dashboard com KPIs melhorados (últimas 24h)
 router.get('/dashboard', verifyToken, async (req, res) => {
   try {
-    await garantirColunas(); // Verifica e cria colunas se faltarem
-    
     const hoje = new Date();
     const hojeStr = hoje.toISOString().split('T')[0];
     
@@ -27,7 +15,7 @@ router.get('/dashboard', verifyToken, async (req, res) => {
     const dataInicioStr = dataInicio.toISOString().split('T')[0];
 
     const emAndamento = await get('SELECT COUNT(*) as total FROM trabalhos WHERE status IN ("Pendente", "Em Andamento")');
-    const receitaPeriodo = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status = "Finalizado" AND IFNULL(data_saida, data_entrada) >= datetime("now", "-1 day")');
+    const receitaPeriodo = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status = "Finalizado" AND data_saida >= datetime("now", "-1 day")');
     const finalizados = await get('SELECT COUNT(*) as total FROM trabalhos WHERE status = "Finalizado"');
     const lucroLiquido = await get('SELECT SUM(lucro_liquido) as total FROM trabalhos WHERE status = "Finalizado"');
     const receitaPendente = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status IN ("Pendente", "Em Andamento")');
@@ -47,9 +35,9 @@ router.get('/dashboard', verifyToken, async (req, res) => {
     `, [hojeStr, proximaDataStr]);
 
     const ultimasEntregas = await all(`
-      SELECT t.id, t.descricao, p.nome as paciente_nome, d.nome as dentista_nome, IFNULL(t.data_saida, t.data_entrada) as data_saida, t.valor_bruto, t.lucro_liquido
+      SELECT t.id, t.descricao, p.nome as paciente_nome, d.nome as dentista_nome, t.data_saida, t.valor_bruto, t.lucro_liquido
       FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id 
-      WHERE t.status = "Finalizado" AND IFNULL(t.data_saida, t.data_entrada) >= datetime("now", "-1 day") ORDER BY data_saida DESC LIMIT 3
+      WHERE t.status = "Finalizado" AND t.data_saida >= datetime("now", "-1 day") ORDER BY t.data_saida DESC LIMIT 3
     `);
 
     const proximosServicos = await all(`
@@ -86,8 +74,6 @@ router.get('/dashboard', verifyToken, async (req, res) => {
 // Dashboard com filtros avançados (para tela de Serviços)
 router.get('/servicos-filtrados', verifyToken, async (req, res) => {
   try {
-    await garantirColunas();
-
     const { status, prioridade, atrasados, proximas_entregas, data_inicio, data_fim } = req.query;
     const hoje = new Date().toISOString().split('T')[0];
     let queryText = `SELECT t.*, p.nome as paciente_nome, d.nome as dentista_nome, tp.nome as tipo_protese_nome FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id LEFT JOIN tipos_protese tp ON t.tipo_protese_id = tp.id`;
@@ -115,12 +101,11 @@ router.get('/servicos-filtrados', verifyToken, async (req, res) => {
 // Relatório de fluxo de caixa
 router.get('/fluxo-caixa', verifyToken, async (req, res) => {
   try {
-    await garantirColunas();
     const { data_inicio, data_fim } = req.query;
     let queryText = 'SELECT * FROM trabalhos WHERE status = "Finalizado"';
     const params = [];
-    if (data_inicio && data_fim) { queryText += ' AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
-    queryText += ' ORDER BY IFNULL(data_saida, data_entrada) DESC';
+    if (data_inicio && data_fim) { queryText += ' AND data_entrada BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
+    queryText += ' ORDER BY data_entrada DESC';
 
     const trabalhos = await all(queryText, params);
     const totais = { valorBruto: 0, custoOperacional: 0, lucroLiquido: 0, quantidade: trabalhos.length };
@@ -135,7 +120,6 @@ router.get('/fluxo-caixa', verifyToken, async (req, res) => {
 // Resumo por período
 router.get('/resumo', verifyToken, async (req, res) => {
   try {
-    await garantirColunas();
     const { periodo = 'mes', data_inicio, data_fim } = req.query;
     let dIni, dFim;
     const hoje = new Date();
@@ -153,9 +137,9 @@ router.get('/resumo', verifyToken, async (req, res) => {
       dIni = dataInicio.toISOString().split('T')[0]; dFim = hojeStr;
     }
 
-    const porProcedimento = await all(`SELECT procedimento, COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ? GROUP BY procedimento ORDER BY quantidade DESC`, [dIni, dFim]);
-    const receitaPorDia = await all(`SELECT IFNULL(data_saida, data_entrada) as data, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro, COUNT(*) as quantidade FROM trabalhos WHERE status = "Finalizado" AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ? GROUP BY data ORDER BY data ASC`, [dIni, dFim]);
-    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(custo_operacional) as custo, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?`, [dIni, dFim]);
+    const porProcedimento = await all(`SELECT procedimento, COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ? GROUP BY procedimento ORDER BY quantidade DESC`, [dIni, dFim]);
+    const receitaPorDia = await all(`SELECT data_entrada as data, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro, COUNT(*) as quantidade FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ? GROUP BY data_entrada ORDER BY data_entrada ASC`, [dIni, dFim]);
+    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(custo_operacional) as custo, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ?`, [dIni, dFim]);
 
     res.json({
       periodo, data_inicio: dIni, data_fim: dFim, porProcedimento, receitaPorDia,
@@ -169,15 +153,14 @@ router.get('/resumo', verifyToken, async (req, res) => {
 // Relatório por forma de pagamento
 router.get('/por-pagamento', verifyToken, async (req, res) => {
   try {
-    await garantirColunas();
     const { data_inicio, data_fim } = req.query;
     let queryText = `SELECT forma_pagamento, COUNT(*) as quantidade, SUM(valor_bruto) as valor FROM trabalhos WHERE status = "Finalizado"`;
     const params = [];
-    if (data_inicio && data_fim) { queryText += ' AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
+    if (data_inicio && data_fim) { queryText += ' AND data_entrada BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
     queryText += ' GROUP BY forma_pagamento ORDER BY valor DESC';
 
     const resultado = await all(queryText, params);
-    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as valor FROM trabalhos WHERE status = "Finalizado" ${data_inicio && data_fim ? 'AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?' : ''}`, data_inicio && data_fim ? [data_inicio, data_fim] : []);
+    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as valor FROM trabalhos WHERE status = "Finalizado" ${data_inicio && data_fim ? 'AND data_entrada BETWEEN ? AND ?' : ''}`, data_inicio && data_fim ? [data_inicio, data_fim] : []);
 
     const resumo = {};
     resultado.forEach(r => { const forma = r.forma_pagamento || 'Não Especificado'; resumo[forma] = { quantidade: r.quantidade, valor: r.valor || 0 }; });
@@ -189,30 +172,31 @@ router.get('/por-pagamento', verifyToken, async (req, res) => {
 });
 
 // ==============================================================================
-// ROTA: Relatório Completo unificado (Para a nova tela de Reports do Front)
+// ROTA: Relatório Completo unificado (Com Filtro de Período)
 // ==============================================================================
 router.get('/completo', verifyToken, async (req, res) => {
   try {
-    await garantirColunas();
-
-    const { periodo = 'mes' } = req.query;
+    const { periodo = 'mes' } = req.query; // Recebe o filtro do front-end
     
     const hoje = new Date();
     let dataInicio = new Date();
     
+    // Configura a data de início baseada no filtro
     if (periodo === 'hoje') dataInicio.setDate(hoje.getDate());
     else if (periodo === 'semana') dataInicio.setDate(hoje.getDate() - 7);
     else if (periodo === 'quinzena') dataInicio.setDate(hoje.getDate() - 15);
     else if (periodo === 'mes') dataInicio.setMonth(hoje.getMonth() - 1);
     
+    // Formata para o padrão do banco de dados (Começo do dia INICIAL até o fim do dia de HOJE)
     const dIni = dataInicio.toISOString().split('T')[0] + ' 00:00:00';
     const dFim = hoje.toISOString().split('T')[0] + ' 23:59:59';
 
+    // 1. Tabela de Serviços (Filtrada pelo período)
     const completedServices = await all(`
       SELECT t.id, p.nome as patient, d.nome as dentist, t.procedimento as procedure, 
              t.valor_bruto as grossValue, t.custo_operacional as operationCost, 
              t.lucro_liquido as netProfit, IFNULL(t.data_saida, t.data_entrada) as completedAt,
-             IFNULL(t.forma_pagamento, 'Não Informado') as forma_pagamento
+             t.forma_pagamento
       FROM trabalhos t
       LEFT JOIN pacientes p ON t.paciente_id = p.id
       LEFT JOIN dentistas d ON t.dentista_id = d.id
@@ -221,6 +205,7 @@ router.get('/completo', verifyToken, async (req, res) => {
       ORDER BY completedAt DESC
     `, [dIni, dFim]);
 
+    // 2. Dados Mensais (Sem filtro de período, para manter o histórico do gráfico anual)
     const monthlyData = await all(`
       SELECT strftime('%Y-%m', IFNULL(t.data_saida, t.data_entrada)) as month, 
              SUM(t.valor_bruto) as revenue, 
@@ -233,25 +218,8 @@ router.get('/completo', verifyToken, async (req, res) => {
       LIMIT 12
     `);
 
-    const paymentMethods = await all(`
-      SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
-             SUM(valor_bruto) as value,
-             COUNT(*) as count
-      FROM trabalhos
-      WHERE status = "Finalizado"
-      AND IFNULL(t.data_saida, t.data_entrada) BETWEEN ? AND ?
-      GROUP BY name
-      ORDER BY value DESC
-    `, [dIni, dFim]);
-
-    const totals = await get(`
-      SELECT SUM(valor_bruto) as revenue, SUM(custo_operacional) as cost, SUM(lucro_liquido) as profit
-      FROM trabalhos 
-      WHERE status = "Finalizado"
-      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
-    `, [dIni, dFim]);
-
-    let costsDistribution = await all(`
+    // 3. Distribuição Detalhada de Custos (Filtrada)
+    const costsDistribution = await all(`
       SELECT c.nome as name, SUM(c.valor) as value
       FROM custos c
       JOIN trabalhos t ON c.trabalho_id = t.id
@@ -262,9 +230,25 @@ router.get('/completo', verifyToken, async (req, res) => {
       ORDER BY value DESC
     `, [dIni, dFim]);
 
-    if (costsDistribution.length === 0 && totals?.cost > 0) {
-      costsDistribution.push({ name: 'Custos Operacionais', value: totals.cost });
-    }
+    // 4. Formas de Pagamento (Filtrada)
+    const paymentMethods = await all(`
+      SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
+             SUM(valor_bruto) as value,
+             COUNT(*) as count
+      FROM trabalhos
+      WHERE status = "Finalizado"
+      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
+      GROUP BY name
+      ORDER BY value DESC
+    `, [dIni, dFim]);
+
+    // 5. Totais Gerais (Filtrada)
+    const totals = await get(`
+      SELECT SUM(valor_bruto) as revenue, SUM(custo_operacional) as cost, SUM(lucro_liquido) as profit
+      FROM trabalhos 
+      WHERE status = "Finalizado"
+      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
+    `, [dIni, dFim]);
 
     res.json({
       completedServices,
@@ -275,7 +259,7 @@ router.get('/completo', verifyToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erro na API de relatórios:', error.message);
+    console.error('Erro ao compilar relatórios:', error);
     res.status(500).json({ error: 'Erro interno ao compilar relatórios' });
   }
 });
