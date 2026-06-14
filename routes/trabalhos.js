@@ -1,281 +1,208 @@
 import express from 'express';
-import { all, get, query } from '../database/database.js'; // Importação do 'query' adicionada
+import { all, get, query } from '../database/database.js';
 import { verifyToken } from './auth.js';
 
 const router = express.Router();
 
-// Dashboard com KPIs melhorados (últimas 24h)
-router.get('/dashboard', verifyToken, async (req, res) => {
+// Listar todos os trabalhos com filtros
+router.get('/', verifyToken, async (req, res) => {
   try {
-    const hoje = new Date();
-    const hojeStr = hoje.toISOString().split('T')[0];
-    
-    const dataInicio = new Date(hoje);
-    dataInicio.setDate(hoje.getDate() - 1);
-    const dataInicioStr = dataInicio.toISOString().split('T')[0];
-
-    const emAndamento = await get('SELECT COUNT(*) as total FROM trabalhos WHERE status IN ("Pendente", "Em Andamento")');
-    const receitaPeriodo = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status = "Finalizado" AND data_saida >= datetime("now", "-1 day")');
-    const finalizados = await get('SELECT COUNT(*) as total FROM trabalhos WHERE status = "Finalizado"');
-    const lucroLiquido = await get('SELECT SUM(lucro_liquido) as total FROM trabalhos WHERE status = "Finalizado"');
-    const receitaPendente = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status IN ("Pendente", "Em Andamento")');
-    
-    const servicosAtrasados = await get(`
-      SELECT COUNT(*) as total FROM trabalhos 
-      WHERE status IN ("Pendente", "Em Andamento") AND prazo_entrega < ? AND prazo_entrega IS NOT NULL
-    `, [hojeStr]);
-
-    const proximaData = new Date(hoje);
-    proximaData.setDate(hoje.getDate() + 1);
-    const proximaDataStr = proximaData.toISOString().split('T')[0];
-
-    const proximasEntregas = await get(`
-      SELECT COUNT(*) as total FROM trabalhos 
-      WHERE status IN ("Pendente", "Em Andamento") AND prazo_entrega BETWEEN ? AND ?
-    `, [hojeStr, proximaDataStr]);
-
-    const ultimasEntregas = await all(`
-      SELECT t.id, t.descricao, p.nome as paciente_nome, d.nome as dentista_nome, t.data_saida, t.valor_bruto, t.lucro_liquido
-      FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id 
-      WHERE t.status = "Finalizado" AND t.data_saida >= datetime("now", "-1 day") ORDER BY t.data_saida DESC LIMIT 3
-    `);
-
-    const proximosServicos = await all(`
-      SELECT t.id, t.descricao, p.nome as paciente_nome, d.nome as dentista_nome, t.prazo_entrega, t.prioridade, t.status
-      FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id 
-      WHERE t.status IN ("Pendente", "Em Andamento") AND t.prazo_entrega BETWEEN ? AND ? ORDER BY t.prazo_entrega ASC, t.prioridade DESC LIMIT 3
-    `, [hojeStr, proximaDataStr]);
-
-    const detalhesAtrasados = await all(`
-      SELECT t.id, t.descricao, p.nome as paciente_nome, d.nome as dentista_nome, t.prazo_entrega, t.prioridade,
-             CAST((julianday(?) - julianday(t.prazo_entrega)) AS INTEGER) as dias_atraso
-      FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id 
-      WHERE t.status IN ("Pendente", "Em Andamento") AND t.prazo_entrega < ? AND t.prazo_entrega IS NOT NULL ORDER BY t.prazo_entrega ASC LIMIT 3
-    `, [hojeStr, hojeStr]);
-
-    res.json({
-      periodo: '24h', data_inicio: dataInicioStr, data_fim: hojeStr,
-      kpis: {
-        emAndamento: emAndamento?.total || 0,
-        receitaPeriodo: receitaPeriodo?.total || 0,
-        finalizados: finalizados?.total || 0,
-        lucroLiquido: lucroLiquido?.total || 0,
-        receitaPendente: receitaPendente?.total || 0,
-        servicosAtrasados: servicosAtrasados?.total || 0,
-        proximasEntregas: proximasEntregas?.total || 0
-      },
-      ultimasEntregas, proximosServicos, servicosAtrasados: detalhesAtrasados
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao obter dashboard' });
-  }
-});
-
-// Dashboard com filtros avançados (para ecrã de Serviços)
-router.get('/servicos-filtrados', verifyToken, async (req, res) => {
-  try {
-    const { status, prioridade, atrasados, proximas_entregas, data_inicio, data_fim } = req.query;
-    const hoje = new Date().toISOString().split('T')[0];
-    let queryText = `SELECT t.*, p.nome as paciente_nome, d.nome as dentista_nome, tp.nome as tipo_protese_nome FROM trabalhos t LEFT JOIN pacientes p ON t.paciente_id = p.id LEFT JOIN dentistas d ON t.dentista_id = d.id LEFT JOIN tipos_protese tp ON t.tipo_protese_id = tp.id`;
+    const { status, data_inicio, data_fim, dentista_id, prioridade } = req.query;
+    let queryText = `SELECT t.*, p.nome as paciente_nome, d.nome as dentista_nome, tp.nome as tipo_protese_nome 
+                     FROM trabalhos t 
+                     LEFT JOIN pacientes p ON t.paciente_id = p.id 
+                     LEFT JOIN dentistas d ON t.dentista_id = d.id 
+                     LEFT JOIN tipos_protese tp ON t.tipo_protese_id = tp.id`;
     const params = [];
     const conditions = [];
 
     if (status) { conditions.push('t.status = ?'); params.push(status); }
-    if (prioridade) { conditions.push('t.prioridade = ?'); params.push(prioridade); }
-    if (atrasados === 'true') { conditions.push('t.status IN ("Pendente", "Em Andamento")', 't.prazo_entrega < ?', 't.prazo_entrega IS NOT NULL'); params.push(hoje); }
-    if (proximas_entregas === 'true') {
-      const proximaData = new Date(); proximaData.setDate(proximaData.getDate() + 7);
-      conditions.push('t.status IN ("Pendente", "Em Andamento")', 't.prazo_entrega BETWEEN ? AND ?'); params.push(hoje, proximaData.toISOString().split('T')[0]);
-    }
     if (data_inicio && data_fim) { conditions.push('t.data_entrada BETWEEN ? AND ?'); params.push(data_inicio, data_fim); }
+    if (dentista_id) { conditions.push('t.dentista_id = ?'); params.push(dentista_id); }
+    if (prioridade) { conditions.push('t.prioridade = ?'); params.push(prioridade); }
     
-    if (conditions.length > 0) queryText += ' WHERE ' + conditions.join(' AND ');
+    if (conditions.length > 0) { queryText += ' WHERE ' + conditions.join(' AND '); }
     queryText += ' ORDER BY t.prioridade DESC, t.prazo_entrega ASC';
 
-    res.json(await all(queryText, params));
+    const result = await all(queryText, params);
+    res.json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao obter serviços filtrados' });
+    console.error('Erro ao listar trabalhos:', error);
+    res.status(500).json({ error: 'Erro ao listar trabalhos' });
   }
 });
 
-// Relatório de fluxo de caixa
-router.get('/fluxo-caixa', verifyToken, async (req, res) => {
+// Obter trabalho por ID com etapas e custos
+router.get('/:id', verifyToken, async (req, res) => {
   try {
-    const { data_inicio, data_fim } = req.query;
-    let queryText = 'SELECT * FROM trabalhos WHERE status = "Finalizado"';
-    const params = [];
-    if (data_inicio && data_fim) { queryText += ' AND data_entrada BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
-    queryText += ' ORDER BY data_entrada DESC';
+    const { id } = req.params;
+    const trabalho = await get(
+      `SELECT t.*, p.nome as paciente_nome, d.nome as dentista_nome, tp.nome as tipo_protese_nome 
+       FROM trabalhos t 
+       LEFT JOIN pacientes p ON t.paciente_id = p.id 
+       LEFT JOIN dentistas d ON t.dentista_id = d.id 
+       LEFT JOIN tipos_protese tp ON t.tipo_protese_id = tp.id 
+       WHERE t.id = ?`,
+      [id]
+    );
+    
+    if (!trabalho) {
+      return res.status(404).json({ error: 'Trabalho não encontrado' });
+    }
 
-    const trabalhos = await all(queryText, params);
-    const totais = { valorBruto: 0, custoOperacional: 0, lucroLiquido: 0, quantidade: trabalhos.length };
-    trabalhos.forEach(t => { totais.valorBruto += t.valor_bruto || 0; totais.custoOperacional += t.custo_operacional || 0; totais.lucroLiquido += t.lucro_liquido || 0; });
+    const etapas = await all('SELECT * FROM etapas WHERE trabalho_id = ? ORDER BY ordem ASC', [id]);
+    const custos = await all('SELECT * FROM custos WHERE trabalho_id = ? ORDER BY data DESC', [id]);
 
-    res.json({ trabalhos, totais });
+    res.json({
+      ...trabalho,
+      etapas,
+      custos
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao obter fluxo de caixa' });
+    console.error('Erro ao obter trabalho:', error);
+    res.status(500).json({ error: 'Erro ao obter trabalho' });
   }
 });
 
-// Resumo por período
-router.get('/resumo', verifyToken, async (req, res) => {
+// Criar novo trabalho com Etapas Dinâmicas
+router.post('/', verifyToken, async (req, res) => {
   try {
-    const { periodo = 'mes', data_inicio, data_fim } = req.query;
-    let dIni, dFim;
-    const hoje = new Date();
-    const hojeStr = hoje.toISOString().split('T')[0];
+    const { 
+      paciente_nome, 
+      dentista_nome, 
+      tipo_protese_id, 
+      descricao, 
+      procedimento, 
+      data_entrada, 
+      prazo_entrega, 
+      prioridade, 
+      valor_bruto, 
+      custo_operacional,
+      forma_pagamento, 
+      resumo_trabalho, 
+      observacoes,
+      etapas
+    } = req.body;
 
-    if (data_inicio && data_fim) { dIni = data_inicio; dFim = data_fim; } 
-    else {
-      let dataInicio;
-      switch (periodo) {
-        case 'hoje': dataInicio = hoje; break;
-        case 'semana': dataInicio = new Date(hoje); dataInicio.setDate(hoje.getDate() - 7); break;
-        case 'ano': dataInicio = new Date(hoje); dataInicio.setFullYear(hoje.getFullYear() - 1); break;
-        default: dataInicio = new Date(hoje); dataInicio.setMonth(hoje.getMonth() - 1);
+    if (!paciente_nome || !dentista_nome || !procedimento || !valor_bruto) {
+      return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+    }
+
+    // Find or Create Paciente
+    let paciente = await get('SELECT id FROM pacientes WHERE nome = ?', [paciente_nome.trim()]);
+    let paciente_id = paciente ? paciente.id : (await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()])).lastID;
+
+    // Find or Create Dentista
+    let dentista = await get('SELECT id FROM dentistas WHERE nome = ?', [dentista_nome.trim()]);
+    let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
+
+    const vb = parseFloat(valor_bruto) || 0;
+    const co = parseFloat(custo_operacional) || 0;
+    const lucro_liquido = vb - co;
+
+    const result = await query(
+      `INSERT INTO trabalhos (
+        paciente_id, dentista_id, tipo_protese_id, descricao, procedimento, 
+        data_entrada, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
+        lucro_liquido, forma_pagamento, resumo_trabalho, observacoes, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        paciente_id, dentista_id, tipo_protese_id || null, descricao || '', procedimento,
+        data_entrada || new Date().toISOString().split('T')[0], prazo_entrega || null,
+        prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
+        resumo_trabalho || null, observacoes || null, 'Pendente'
+      ]
+    );
+
+    const trabalhoId = result.lastID;
+
+    // Gravar etapas vinculadas se existirem
+    if (etapas && Array.isArray(etapas)) {
+      for (let i = 0; i < etapas.length; i++) {
+        if (etapas[i].nome?.trim()) {
+          await query(
+            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+            [trabalhoId, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
+          );
+        }
       }
-      dIni = dataInicio.toISOString().split('T')[0]; dFim = hojeStr;
     }
 
-    const porProcedimento = await all(`SELECT procedimento, COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ? GROUP BY procedimento ORDER BY quantidade DESC`, [dIni, dFim]);
-    const receitaPorDia = await all(`SELECT data_entrada as data, SUM(valor_bruto) as receita, SUM(lucro_liquido) as lucro, COUNT(*) as quantidade FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ? GROUP BY data_entrada ORDER BY data_entrada ASC`, [dIni, dFim]);
-    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as receita, SUM(custo_operacional) as custo, SUM(lucro_liquido) as lucro FROM trabalhos WHERE status = "Finalizado" AND data_entrada BETWEEN ? AND ?`, [dIni, dFim]);
-
-    res.json({
-      periodo, data_inicio: dIni, data_fim: dFim, porProcedimento, receitaPorDia,
-      totais: { quantidade: totais?.quantidade || 0, receita: totais?.receita || 0, custo: totais?.custo || 0, lucro: totais?.lucro || 0 }
-    });
+    res.status(201).json({ message: 'Trabalho criado com sucesso', id: trabalhoId });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao obter resumo' });
+    console.error('Erro ao criar trabalho:', error);
+    res.status(500).json({ error: 'Erro interno ao criar trabalho' });
   }
 });
 
-// Relatório por forma de pagamento
-router.get('/por-pagamento', verifyToken, async (req, res) => {
+// Atualizar trabalho (Garante salvamento completo de etapas e prazos)
+router.put('/:id', verifyToken, async (req, res) => {
   try {
-    const { data_inicio, data_fim } = req.query;
-    let queryText = `SELECT forma_pagamento, COUNT(*) as quantidade, SUM(valor_bruto) as valor FROM trabalhos WHERE status = "Finalizado"`;
-    const params = [];
-    if (data_inicio && data_fim) { queryText += ' AND data_entrada BETWEEN ? AND ?'; params.push(data_inicio, data_fim); }
-    queryText += ' GROUP BY forma_pagamento ORDER BY valor DESC';
+    const { id } = req.params;
+    const { 
+      descricao, procedimento, status, valor_bruto, custo_operacional, 
+      prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
+      observacoes, etapas 
+    } = req.body;
 
-    const resultado = await all(queryText, params);
-    const totais = await get(`SELECT COUNT(*) as quantidade, SUM(valor_bruto) as valor FROM trabalhos WHERE status = "Finalizado" ${data_inicio && data_fim ? 'AND data_entrada BETWEEN ? AND ?' : ''}`, data_inicio && data_fim ? [data_inicio, data_fim] : []);
+    const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
+    if (!trabalho) {
+      return res.status(404).json({ error: 'Trabalho não encontrado' });
+    }
 
-    const resumo = {};
-    resultado.forEach(r => { const forma = r.forma_pagamento || 'Não Especificado'; resumo[forma] = { quantidade: r.quantidade, valor: r.valor || 0 }; });
+    const vb = valor_bruto !== undefined ? parseFloat(valor_bruto) : trabalho.valor_bruto;
+    const co = custo_operacional !== undefined ? parseFloat(custo_operacional) : trabalho.custo_operacional;
+    const lucro_liquido = vb - co;
 
-    res.json({ data_inicio, data_fim, resumo, total: { quantidade: totais?.quantidade || 0, valor: totais?.valor || 0 } });
+    await query(
+      `UPDATE trabalhos SET 
+        descricao = ?, procedimento = ?, status = ?, valor_bruto = ?, custo_operacional = ?, 
+        lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, 
+        resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = ?`,
+      [
+        descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
+        vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
+        forma_pagamento || trabalho.forma_pagamento, resumo_trabalho || trabalho.resumo_trabalho,
+        observacoes || trabalho.observacoes, id
+      ]
+    );
+
+    // Sincronizar etapas: remove as antigas e insere o novo estado enviado pelo front
+    if (etapas && Array.isArray(etapas)) {
+      await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
+      for (let i = 0; i < etapas.length; i++) {
+        if (etapas[i].nome?.trim()) {
+          await query(
+            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+            [id, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
+          );
+        }
+      }
+    }
+
+    res.json({ message: 'Trabalho atualizado com sucesso' });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao obter relatório por pagamento' });
+    console.error('Erro ao atualizar trabalho:', error);
+    res.status(500).json({ error: 'Erro ao atualizar trabalho' });
   }
 });
 
-// ==============================================================================
-// NOVA ROTA: Relatório Completo unificado (Com Filtro de Período e Auto-Correção)
-// ==============================================================================
-router.get('/completo', verifyToken, async (req, res) => {
+// Deletar trabalho
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    // 1. AUTO-CORREÇÃO DO BANCO DE DADOS
-    // Se o banco não tiver as colunas novas, tenta criá-las antes de quebrar a API.
-    try { await query("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch (e) {}
-    try { await query("ALTER TABLE trabalhos ADD COLUMN forma_pagamento TEXT"); } catch (e) {}
-    try { await query("ALTER TABLE custos ADD COLUMN nome TEXT"); } catch (e) {}
+    const { id } = req.params;
+    const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
+    if (!trabalho) return res.status(404).json({ error: 'Trabalho não encontrado' });
 
-    const { periodo = 'mes' } = req.query;
-    
-    const hoje = new Date();
-    let dataInicio = new Date();
-    
-    if (periodo === 'hoje') dataInicio.setDate(hoje.getDate());
-    else if (periodo === 'semana') dataInicio.setDate(hoje.getDate() - 7);
-    else if (periodo === 'quinzena') dataInicio.setDate(hoje.getDate() - 15);
-    else if (periodo === 'mes') dataInicio.setMonth(hoje.getMonth() - 1);
-    
-    // Ajuste seguro de formato de datas para SQLite (Y-M-D)
-    const dIni = dataInicio.toISOString().split('T')[0];
-    const dFim = hoje.toISOString().split('T')[0] + ' 23:59:59';
+    await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
+    await query('DELETE FROM custos WHERE trabalho_id = ?', [id]);
+    await query('DELETE FROM anexos WHERE trabalho_id = ?', [id]);
+    await query('DELETE FROM trabalhos WHERE id = ?', [id]);
 
-    // Serviços Filtrados
-    const completedServices = await all(`
-      SELECT t.id, p.nome as patient, d.nome as dentist, t.procedimento as procedure, 
-             t.valor_bruto as grossValue, t.custo_operacional as operationCost, 
-             t.lucro_liquido as netProfit, IFNULL(t.data_saida, t.data_entrada) as completedAt,
-             t.forma_pagamento
-      FROM trabalhos t
-      LEFT JOIN pacientes p ON t.paciente_id = p.id
-      LEFT JOIN dentistas d ON t.dentista_id = d.id
-      WHERE t.status = "Finalizado"
-      AND IFNULL(t.data_saida, t.data_entrada) >= ? AND IFNULL(t.data_saida, t.data_entrada) <= ?
-      ORDER BY completedAt DESC
-    `, [dIni, dFim]);
-
-    // Gráfico Histórico Anual (Sem filtro)
-    const monthlyData = await all(`
-      SELECT strftime('%Y-%m', IFNULL(t.data_saida, t.data_entrada)) as month, 
-             SUM(t.valor_bruto) as revenue, 
-             SUM(t.custo_operacional) as cost, 
-             SUM(t.lucro_liquido) as profit
-      FROM trabalhos t
-      WHERE t.status = "Finalizado"
-      GROUP BY month
-      ORDER BY month ASC
-      LIMIT 12
-    `);
-
-    // Distribuição de Pagamentos
-    const paymentMethods = await all(`
-      SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
-             SUM(valor_bruto) as value,
-             COUNT(*) as count
-      FROM trabalhos
-      WHERE status = "Finalizado"
-      AND IFNULL(data_saida, data_entrada) >= ? AND IFNULL(data_saida, data_entrada) <= ?
-      GROUP BY name
-      ORDER BY value DESC
-    `, [dIni, dFim]);
-
-    // Totais KPIs
-    const totals = await get(`
-      SELECT SUM(valor_bruto) as revenue, SUM(custo_operacional) as cost, SUM(lucro_liquido) as profit
-      FROM trabalhos 
-      WHERE status = "Finalizado"
-      AND IFNULL(data_saida, data_entrada) >= ? AND IFNULL(data_saida, data_entrada) <= ?
-    `, [dIni, dFim]);
-
-    // Distribuição de Custos
-    let costsDistribution = [];
-    try {
-      costsDistribution = await all(`
-        SELECT c.nome as name, SUM(c.valor) as value
-        FROM custos c
-        JOIN trabalhos t ON c.trabalho_id = t.id
-        WHERE t.status = "Finalizado" 
-        AND IFNULL(t.data_saida, t.data_entrada) >= ? AND IFNULL(t.data_saida, t.data_entrada) <= ?
-        AND c.nome IS NOT NULL AND c.nome != ''
-        GROUP BY c.nome
-        ORDER BY value DESC
-      `, [dIni, dFim]);
-    } catch (e) {
-      console.log("A tabela de custos detalhados ainda não existe, pulando.");
-    }
-
-    // Fallback: Se não houver custos detalhados na tabela, exibe o Custo Total Geral no gráfico
-    if (costsDistribution.length === 0 && totals?.cost > 0) {
-      costsDistribution.push({ name: 'Custos Operacionais', value: totals.cost });
-    }
-
-    res.json({
-      completedServices,
-      monthlyData: monthlyData.map(d => ({ month: d.month, revenue: d.revenue || 0, cost: d.cost || 0, profit: d.profit || 0 })),
-      costsDistribution: costsDistribution.map(c => ({ name: c.name, value: c.value || 0 })),
-      paymentMethods: paymentMethods.map(p => ({ name: p.name, value: p.value || 0, count: p.count || 0 })),
-      totals: { revenue: totals?.revenue || 0, cost: totals?.cost || 0, profit: totals?.profit || 0 }
-    });
-
+    res.json({ message: 'Trabalho deletado com sucesso' });
   } catch (error) {
-    console.error('Erro interno brutal na API de relatórios:', error.message);
-    res.status(500).json({ error: 'Erro interno ao compilar relatórios' });
+    res.status(500).json({ error: 'Erro ao deletar trabalho' });
   }
 });
 
