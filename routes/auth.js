@@ -1,6 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { get } from '../database/database.js';
+import bcrypt from 'bcryptjs';
 
 const router = express.Router();
 
@@ -32,7 +33,13 @@ router.post('/login', async (req, res) => {
 
     const user = await get('SELECT * FROM users WHERE username = ?', [username]);
     
-    if (!user || password !== user.password) {
+        if (!user) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
