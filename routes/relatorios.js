@@ -172,10 +172,26 @@ router.get('/por-pagamento', verifyToken, async (req, res) => {
 });
 
 // ==============================================================================
-// NOVA ROTA: Relatório Completo unificado (Para a nova tela de Reports do Front)
+// ROTA: Relatório Completo unificado (Com Filtro de Período)
 // ==============================================================================
 router.get('/completo', verifyToken, async (req, res) => {
   try {
+    const { periodo = 'mes' } = req.query; // Recebe o filtro do front-end
+    
+    const hoje = new Date();
+    let dataInicio = new Date();
+    
+    // Configura a data de início baseada no filtro
+    if (periodo === 'hoje') dataInicio.setDate(hoje.getDate());
+    else if (periodo === 'semana') dataInicio.setDate(hoje.getDate() - 7);
+    else if (periodo === 'quinzena') dataInicio.setDate(hoje.getDate() - 15);
+    else if (periodo === 'mes') dataInicio.setMonth(hoje.getMonth() - 1);
+    
+    // Formata para o padrão do banco de dados (Começo do dia INICIAL até o fim do dia de HOJE)
+    const dIni = dataInicio.toISOString().split('T')[0] + ' 00:00:00';
+    const dFim = hoje.toISOString().split('T')[0] + ' 23:59:59';
+
+    // 1. Tabela de Serviços (Filtrada pelo período)
     const completedServices = await all(`
       SELECT t.id, p.nome as patient, d.nome as dentist, t.procedimento as procedure, 
              t.valor_bruto as grossValue, t.custo_operacional as operationCost, 
@@ -185,9 +201,11 @@ router.get('/completo', verifyToken, async (req, res) => {
       LEFT JOIN pacientes p ON t.paciente_id = p.id
       LEFT JOIN dentistas d ON t.dentista_id = d.id
       WHERE t.status = "Finalizado"
-      ORDER BY t.data_saida DESC
-    `);
+      AND IFNULL(t.data_saida, t.data_entrada) BETWEEN ? AND ?
+      ORDER BY completedAt DESC
+    `, [dIni, dFim]);
 
+    // 2. Dados Mensais (Sem filtro de período, para manter o histórico do gráfico anual)
     const monthlyData = await all(`
       SELECT strftime('%Y-%m', IFNULL(t.data_saida, t.data_entrada)) as month, 
              SUM(t.valor_bruto) as revenue, 
@@ -200,29 +218,37 @@ router.get('/completo', verifyToken, async (req, res) => {
       LIMIT 12
     `);
 
+    // 3. Distribuição Detalhada de Custos (Filtrada)
     const costsDistribution = await all(`
       SELECT c.nome as name, SUM(c.valor) as value
       FROM custos c
       JOIN trabalhos t ON c.trabalho_id = t.id
-      WHERE t.status = "Finalizado" AND c.nome IS NOT NULL AND c.nome != ''
+      WHERE t.status = "Finalizado" 
+      AND IFNULL(t.data_saida, t.data_entrada) BETWEEN ? AND ?
+      AND c.nome IS NOT NULL AND c.nome != ''
       GROUP BY c.nome
       ORDER BY value DESC
-    `);
+    `, [dIni, dFim]);
 
+    // 4. Formas de Pagamento (Filtrada)
     const paymentMethods = await all(`
       SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
              SUM(valor_bruto) as value,
              COUNT(*) as count
       FROM trabalhos
       WHERE status = "Finalizado"
+      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
       GROUP BY name
       ORDER BY value DESC
-    `);
+    `, [dIni, dFim]);
 
+    // 5. Totais Gerais (Filtrada)
     const totals = await get(`
       SELECT SUM(valor_bruto) as revenue, SUM(custo_operacional) as cost, SUM(lucro_liquido) as profit
-      FROM trabalhos WHERE status = "Finalizado"
-    `);
+      FROM trabalhos 
+      WHERE status = "Finalizado"
+      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
+    `, [dIni, dFim]);
 
     res.json({
       completedServices,
@@ -233,6 +259,7 @@ router.get('/completo', verifyToken, async (req, res) => {
     });
 
   } catch (error) {
+    console.error('Erro ao compilar relatórios:', error);
     res.status(500).json({ error: 'Erro interno ao compilar relatórios' });
   }
 });
