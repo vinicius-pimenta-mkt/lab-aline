@@ -172,42 +172,52 @@ router.get('/por-pagamento', verifyToken, async (req, res) => {
 });
 
 // ==============================================================================
-// ROTA: Relatório Completo unificado (Com Filtro de Período)
+// NOVA ROTA: Relatório Completo unificado (Com Filtro de Período e BLINDADO)
 // ==============================================================================
 router.get('/completo', verifyToken, async (req, res) => {
   try {
-    const { periodo = 'mes' } = req.query; // Recebe o filtro do front-end
+    const { periodo = 'mes' } = req.query;
     
     const hoje = new Date();
     let dataInicio = new Date();
     
-    // Configura a data de início baseada no filtro
     if (periodo === 'hoje') dataInicio.setDate(hoje.getDate());
     else if (periodo === 'semana') dataInicio.setDate(hoje.getDate() - 7);
     else if (periodo === 'quinzena') dataInicio.setDate(hoje.getDate() - 15);
     else if (periodo === 'mes') dataInicio.setMonth(hoje.getMonth() - 1);
     
-    // Formata para o padrão do banco de dados (Começo do dia INICIAL até o fim do dia de HOJE)
     const dIni = dataInicio.toISOString().split('T')[0] + ' 00:00:00';
     const dFim = hoje.toISOString().split('T')[0] + ' 23:59:59';
 
-    // 1. Tabela de Serviços (Filtrada pelo período)
+    // 1. Verificar colunas existentes no Banco de Dados (Isso evita o Erro 500!)
+    const colunasTrab = await all("PRAGMA table_info(trabalhos)");
+    const temDataSaida = colunasTrab.some(c => c.name === 'data_saida');
+    const temPagamento = colunasTrab.some(c => c.name === 'forma_pagamento');
+
+    const colunasCustos = await all("PRAGMA table_info(custos)");
+    const temNomeCusto = colunasCustos.some(c => c.name === 'nome');
+
+    // Define quais campos o SQL deve usar para não quebrar
+    const campoData = temDataSaida ? "IFNULL(t.data_saida, t.data_entrada)" : "t.data_entrada";
+    const campoPagamento = temPagamento ? "t.forma_pagamento" : "'Não informado'";
+
+    // Serviços Filtrados
     const completedServices = await all(`
       SELECT t.id, p.nome as patient, d.nome as dentist, t.procedimento as procedure, 
              t.valor_bruto as grossValue, t.custo_operacional as operationCost, 
-             t.lucro_liquido as netProfit, IFNULL(t.data_saida, t.data_entrada) as completedAt,
-             t.forma_pagamento
+             t.lucro_liquido as netProfit, ${campoData} as completedAt,
+             ${campoPagamento} as forma_pagamento
       FROM trabalhos t
       LEFT JOIN pacientes p ON t.paciente_id = p.id
       LEFT JOIN dentistas d ON t.dentista_id = d.id
       WHERE t.status = "Finalizado"
-      AND IFNULL(t.data_saida, t.data_entrada) BETWEEN ? AND ?
+      AND ${campoData} BETWEEN ? AND ?
       ORDER BY completedAt DESC
     `, [dIni, dFim]);
 
-    // 2. Dados Mensais (Sem filtro de período, para manter o histórico do gráfico anual)
+    // Gráfico Histórico Anual (Sem filtro de período para não bugar as colunas)
     const monthlyData = await all(`
-      SELECT strftime('%Y-%m', IFNULL(t.data_saida, t.data_entrada)) as month, 
+      SELECT strftime('%Y-%m', ${campoData}) as month, 
              SUM(t.valor_bruto) as revenue, 
              SUM(t.custo_operacional) as cost, 
              SUM(t.lucro_liquido) as profit
@@ -218,37 +228,48 @@ router.get('/completo', verifyToken, async (req, res) => {
       LIMIT 12
     `);
 
-    // 3. Distribuição Detalhada de Custos (Filtrada)
-    const costsDistribution = await all(`
-      SELECT c.nome as name, SUM(c.valor) as value
-      FROM custos c
-      JOIN trabalhos t ON c.trabalho_id = t.id
-      WHERE t.status = "Finalizado" 
-      AND IFNULL(t.data_saida, t.data_entrada) BETWEEN ? AND ?
-      AND c.nome IS NOT NULL AND c.nome != ''
-      GROUP BY c.nome
-      ORDER BY value DESC
-    `, [dIni, dFim]);
+    // Distribuição de Pagamentos
+    let paymentMethods = [];
+    if (temPagamento) {
+        paymentMethods = await all(`
+          SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
+                 SUM(valor_bruto) as value,
+                 COUNT(*) as count
+          FROM trabalhos
+          WHERE status = "Finalizado"
+          AND ${campoData} BETWEEN ? AND ?
+          GROUP BY name
+          ORDER BY value DESC
+        `, [dIni, dFim]);
+    }
 
-    // 4. Formas de Pagamento (Filtrada)
-    const paymentMethods = await all(`
-      SELECT IFNULL(forma_pagamento, 'Não Informado') as name, 
-             SUM(valor_bruto) as value,
-             COUNT(*) as count
-      FROM trabalhos
-      WHERE status = "Finalizado"
-      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
-      GROUP BY name
-      ORDER BY value DESC
-    `, [dIni, dFim]);
-
-    // 5. Totais Gerais (Filtrada)
+    // Totais KPIs
     const totals = await get(`
       SELECT SUM(valor_bruto) as revenue, SUM(custo_operacional) as cost, SUM(lucro_liquido) as profit
       FROM trabalhos 
       WHERE status = "Finalizado"
-      AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
+      AND ${campoData} BETWEEN ? AND ?
     `, [dIni, dFim]);
+
+    // Distribuição de Custos
+    let costsDistribution = [];
+    if (temNomeCusto) {
+      costsDistribution = await all(`
+        SELECT c.nome as name, SUM(c.valor) as value
+        FROM custos c
+        JOIN trabalhos t ON c.trabalho_id = t.id
+        WHERE t.status = "Finalizado" 
+        AND ${campoData} BETWEEN ? AND ?
+        AND c.nome IS NOT NULL AND c.nome != ''
+        GROUP BY c.nome
+        ORDER BY value DESC
+      `, [dIni, dFim]);
+    }
+
+    // Fallback: Se não houver custos detalhados, exibe o Custo Total
+    if (costsDistribution.length === 0 && totals?.cost > 0) {
+      costsDistribution.push({ name: 'Custos Operacionais', value: totals.cost });
+    }
 
     res.json({
       completedServices,
@@ -259,8 +280,24 @@ router.get('/completo', verifyToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erro ao compilar relatórios:', error);
+    console.error('Erro na API de relatórios:', error.message);
     res.status(500).json({ error: 'Erro interno ao compilar relatórios' });
+  }
+});
+
+// ==============================================================================
+// ROTA PARA ATUALIZAR O BANCO DE DADOS FACILMENTE
+// ==============================================================================
+router.get('/setup-banco', async (req, res) => {
+  try {
+    const logs = [];
+    try { await query("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch(e) { logs.push(e.message); }
+    try { await query("ALTER TABLE trabalhos ADD COLUMN forma_pagamento TEXT"); } catch(e) { logs.push(e.message); }
+    try { await query("ALTER TABLE custos ADD COLUMN nome TEXT"); } catch(e) { logs.push(e.message); }
+    
+    res.json({ message: "Seu banco de dados foi atualizado com sucesso!", ignorados: logs });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
