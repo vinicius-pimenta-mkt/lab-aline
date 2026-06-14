@@ -1,4 +1,5 @@
 import sqlite3 from 'sqlite3';
+import bcrypt from 'bcryptjs';
 import { open } from 'sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,7 +12,7 @@ let db;
 
 export const initDatabase = async () => {
   try {
-    const dbPath = path.join(__dirname, 'labprotese.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, 'labprotese.db');
     console.log('Caminho do banco de dados:', dbPath);
     
     db = await open({
@@ -170,7 +171,8 @@ export const initDatabase = async () => {
 
     const existingUser = await db.get('SELECT * FROM users WHERE username = ?', adminUser);
     if (!existingUser) {
-      await db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', adminUser, adminPass, 'admin');
+            const hashedPassword = await bcrypt.hash(adminPass, 10);
+      await db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', adminUser, hashedPassword, 'admin');
       console.log('Usuário admin padrão inserido.');
     }
 
