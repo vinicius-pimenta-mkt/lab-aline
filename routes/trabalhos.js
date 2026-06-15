@@ -64,7 +64,7 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo trabalho com Etapas Dinâmicas (CORRIGIDO PARA SALVAR STATUS E DATA SAÍDA)
+// Criar novo trabalho salvando os custos dinâmicos na tabela vinculada
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
@@ -74,7 +74,7 @@ router.post('/', verifyToken, async (req, res) => {
       descricao, 
       procedimento, 
       data_entrada, 
-      data_saida, // <-- Faltava receber a data de saída
+      data_saida,
       prazo_entrega, 
       prioridade, 
       valor_bruto, 
@@ -83,7 +83,8 @@ router.post('/', verifyToken, async (req, res) => {
       resumo_trabalho, 
       observacoes,
       etapas,
-      status // <-- Faltava receber o status do front
+      status,
+      costs // Recebe a lista de custos individualizados do front-end
     } = req.body;
 
     if (!paciente_nome || !dentista_nome || !procedimento || !valor_bruto) {
@@ -99,6 +100,7 @@ router.post('/', verifyToken, async (req, res) => {
     const vb = parseFloat(valor_bruto) || 0;
     const co = parseFloat(custo_operacional) || 0;
     const lucro_liquido = vb - co;
+    const entradaData = data_entrada || new Date().toISOString().split('T')[0];
 
     const result = await query(
       `INSERT INTO trabalhos (
@@ -108,16 +110,28 @@ router.post('/', verifyToken, async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         paciente_id, dentista_id, tipo_protese_id || null, descricao || '', procedimento,
-        data_entrada || new Date().toISOString().split('T')[0], 
-        data_saida || null, // <-- Agora salva a data de finalização se houver
-        prazo_entrega || null, prioridade || 'normal', vb, co, lucro_liquido, 
-        forma_pagamento || null, resumo_trabalho || null, observacoes || null, 
-        status || 'Pendente' // <-- Agora salva o status real (Finalizado) e não força Pendente
+        entradaData, data_saida || null, prazo_entrega || null,
+        prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
+        resumo_trabalho || null, observacoes || null, status || 'Pendente'
       ]
     );
 
     const trabalhoId = result.lastID;
 
+    // Gravar custos individualizados na tabela custos para popular os relatórios
+    if (costs && Array.isArray(costs)) {
+      for (let cost of costs) {
+        const nomeCusto = cost.name?.trim() || cost.descricao?.trim();
+        if (nomeCusto) {
+          await query(
+            `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
+            [trabalhoId, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, entradaData]
+          );
+        }
+      }
+    }
+
+    // Gravar etapas vinculadas
     if (etapas && Array.isArray(etapas)) {
       for (let i = 0; i < etapas.length; i++) {
         if (etapas[i].nome?.trim()) {
@@ -136,14 +150,14 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// Atualizar trabalho (CORRIGIDO PARA ATUALIZAR DATA SAÍDA)
+// Atualizar trabalho sincronizando custos dinâmicos
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { 
       descricao, procedimento, status, data_saida, valor_bruto, custo_operacional, 
       prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
-      observacoes, etapas 
+      observacoes, etapas, costs
     } = req.body;
 
     const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
@@ -162,14 +176,29 @@ router.put('/:id', verifyToken, async (req, res) => {
         resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [
-        descricao || trabalho.descricao, procedimento || trabalho.procedimento, 
-        status || trabalho.status, data_saida !== undefined ? data_saida : trabalho.data_saida, // <-- Atualiza a data se finalizado depois
+        descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
+        data_saida !== undefined ? data_saida : trabalho.data_saida,
         vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
         forma_pagamento || trabalho.forma_pagamento, resumo_trabalho || trabalho.resumo_trabalho,
         observacoes || trabalho.observacoes, id
       ]
     );
 
+    // Sincronizar custos individualizados
+    if (costs && Array.isArray(costs)) {
+      await query('DELETE FROM custos WHERE trabalho_id = ?', [id]);
+      for (let cost of costs) {
+        const nomeCusto = cost.name?.trim() || cost.descricao?.trim();
+        if (nomeCusto) {
+          await query(
+            `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
+            [id, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, trabalho.data_entrada]
+          );
+        }
+      }
+    }
+
+    // Sincronizar etapas
     if (etapas && Array.isArray(etapas)) {
       await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
       for (let i = 0; i < etapas.length; i++) {
@@ -182,7 +211,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    res.json({ message: 'Trabalho atualizado com sucesso' });
+    res.json({ message: 'Trabalho updated' });
   } catch (error) {
     console.error('Erro ao atualizar trabalho:', error);
     res.status(500).json({ error: 'Erro ao atualizar trabalho' });
@@ -196,7 +225,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
     const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
     if (!trabalho) return res.status(404).json({ error: 'Trabalho não encontrado' });
 
-    await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
+    await query('DELETE FROM etapas WHERE trabajo_id = ?', [id]);
     await query('DELETE FROM custos WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM anexos WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM trabalhos WHERE id = ?', [id]);
