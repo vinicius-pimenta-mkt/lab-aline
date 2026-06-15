@@ -64,7 +64,7 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo trabalho com Etapas Dinâmicas
+// Criar novo trabalho com Etapas Dinâmicas (CORRIGIDO PARA SALVAR STATUS E DATA SAÍDA)
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
@@ -74,6 +74,7 @@ router.post('/', verifyToken, async (req, res) => {
       descricao, 
       procedimento, 
       data_entrada, 
+      data_saida, // <-- Faltava receber a data de saída
       prazo_entrega, 
       prioridade, 
       valor_bruto, 
@@ -81,18 +82,17 @@ router.post('/', verifyToken, async (req, res) => {
       forma_pagamento, 
       resumo_trabalho, 
       observacoes,
-      etapas
+      etapas,
+      status // <-- Faltava receber o status do front
     } = req.body;
 
     if (!paciente_nome || !dentista_nome || !procedimento || !valor_bruto) {
       return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
     }
 
-    // Find or Create Paciente
     let paciente = await get('SELECT id FROM pacientes WHERE nome = ?', [paciente_nome.trim()]);
     let paciente_id = paciente ? paciente.id : (await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()])).lastID;
 
-    // Find or Create Dentista
     let dentista = await get('SELECT id FROM dentistas WHERE nome = ?', [dentista_nome.trim()]);
     let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
 
@@ -103,20 +103,21 @@ router.post('/', verifyToken, async (req, res) => {
     const result = await query(
       `INSERT INTO trabalhos (
         paciente_id, dentista_id, tipo_protese_id, descricao, procedimento, 
-        data_entrada, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
+        data_entrada, data_saida, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
         lucro_liquido, forma_pagamento, resumo_trabalho, observacoes, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         paciente_id, dentista_id, tipo_protese_id || null, descricao || '', procedimento,
-        data_entrada || new Date().toISOString().split('T')[0], prazo_entrega || null,
-        prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
-        resumo_trabalho || null, observacoes || null, 'Pendente'
+        data_entrada || new Date().toISOString().split('T')[0], 
+        data_saida || null, // <-- Agora salva a data de finalização se houver
+        prazo_entrega || null, prioridade || 'normal', vb, co, lucro_liquido, 
+        forma_pagamento || null, resumo_trabalho || null, observacoes || null, 
+        status || 'Pendente' // <-- Agora salva o status real (Finalizado) e não força Pendente
       ]
     );
 
     const trabalhoId = result.lastID;
 
-    // Gravar etapas vinculadas se existirem
     if (etapas && Array.isArray(etapas)) {
       for (let i = 0; i < etapas.length; i++) {
         if (etapas[i].nome?.trim()) {
@@ -135,12 +136,12 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// Atualizar trabalho (Garante salvamento completo de etapas e prazos)
+// Atualizar trabalho (CORRIGIDO PARA ATUALIZAR DATA SAÍDA)
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      descricao, procedimento, status, valor_bruto, custo_operacional, 
+      descricao, procedimento, status, data_saida, valor_bruto, custo_operacional, 
       prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
       observacoes, etapas 
     } = req.body;
@@ -156,19 +157,19 @@ router.put('/:id', verifyToken, async (req, res) => {
 
     await query(
       `UPDATE trabalhos SET 
-        descricao = ?, procedimento = ?, status = ?, valor_bruto = ?, custo_operacional = ?, 
+        descricao = ?, procedimento = ?, status = ?, data_saida = ?, valor_bruto = ?, custo_operacional = ?, 
         lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, 
         resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [
-        descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
+        descricao || trabalho.descricao, procedimento || trabalho.procedimento, 
+        status || trabalho.status, data_saida !== undefined ? data_saida : trabalho.data_saida, // <-- Atualiza a data se finalizado depois
         vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
         forma_pagamento || trabalho.forma_pagamento, resumo_trabalho || trabalho.resumo_trabalho,
         observacoes || trabalho.observacoes, id
       ]
     );
 
-    // Sincronizar etapas: remove as antigas e insere o novo estado enviado pelo front
     if (etapas && Array.isArray(etapas)) {
       await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
       for (let i = 0; i < etapas.length; i++) {
