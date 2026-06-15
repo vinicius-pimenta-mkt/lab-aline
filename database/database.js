@@ -20,7 +20,6 @@ export const initDatabase = async () => {
       driver: sqlite3.Database
     });
 
-    // Tabela de usuários (administradores do laboratório)
     await db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +30,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de tipos de prótese
     await db.exec(`
       CREATE TABLE IF NOT EXISTS tipos_protese (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +41,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de serviços padrão
     await db.exec(`
       CREATE TABLE IF NOT EXISTS servicos_padrao (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +55,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de dentistas (responsáveis pelos trabalhos)
     await db.exec(`
       CREATE TABLE IF NOT EXISTS dentistas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +67,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de pacientes
     await db.exec(`
       CREATE TABLE IF NOT EXISTS pacientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +80,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de trabalhos/serviços
     await db.exec(`
       CREATE TABLE IF NOT EXISTS trabalhos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +107,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de etapas do procedimento
     await db.exec(`
       CREATE TABLE IF NOT EXISTS etapas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,7 +123,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de custos operacionais
     await db.exec(`
       CREATE TABLE IF NOT EXISTS custos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,7 +137,6 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Tabela de anexos (fotos, radiografias, etc)
     await db.exec(`
       CREATE TABLE IF NOT EXISTS anexos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,25 +149,27 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Migrações de segurança
+    // ==========================================
+    // MIGRAÇÕES DE SEGURANÇA (CORRIGE O ERRO 500)
+    // ==========================================
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN tipo_protese_id INTEGER"); } catch (e) {}
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN prazo_entrega TEXT"); } catch (e) {}
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN prioridade TEXT DEFAULT 'normal'"); } catch (e) {}
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN forma_pagamento TEXT"); } catch (e) {}
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN resumo_trabalho TEXT"); } catch (e) {}
+    try { await db.exec("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch (e) {}
+    try { await db.exec("ALTER TABLE custos ADD COLUMN nome TEXT"); } catch (e) {}
 
-    // Inserir usuário admin padrão se não existir
     const adminUser = process.env.ADMIN_USER || 'admin';
     const adminPass = process.env.ADMIN_PASS || '123456';
 
     const existingUser = await db.get('SELECT * FROM users WHERE username = ?', adminUser);
     if (!existingUser) {
-            const hashedPassword = await bcrypt.hash(adminPass, 10);
+      const hashedPassword = await bcrypt.hash(adminPass, 10);
       await db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', adminUser, hashedPassword, 'admin');
       console.log('Usuário admin padrão inserido.');
     }
 
-    // Inserir tipos de prótese padrão
     const tiposProtese = [
       { nome: 'Coroa Unitária', tempo_medio_dias: 7, valor_padrao: 400 },
       { nome: 'Ponte', tempo_medio_dias: 10, valor_padrao: 900 },
