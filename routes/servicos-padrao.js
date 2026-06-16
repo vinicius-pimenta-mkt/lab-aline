@@ -4,11 +4,11 @@ import { verifyToken } from './auth.js';
 
 const router = express.Router();
 
-// Listar todos os serviços padrão
+// Listar todos os serviços padrão (Otimizado para o Autocompletar do Front-end)
 router.get('/', verifyToken, async (req, res) => {
   try {
     const servicos = await all(
-      `SELECT s.*, t.nome as tipo_protese_nome 
+      `SELECT s.id, s.nome, s.valor_padrao, s.descricao, s.tempo_medio_dias, t.nome as tipo_protese_nome 
        FROM servicos_padrao s 
        LEFT JOIN tipos_protese t ON s.tipo_protese_id = t.id 
        WHERE s.ativo = 1 
