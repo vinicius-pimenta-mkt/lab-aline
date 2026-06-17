@@ -222,6 +222,11 @@ console.log('Serviços pré-fixados de prótese alinhados com sucesso!');
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN resumo_trabalho TEXT"); } catch (e) {}
     try { await db.exec("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch (e) {}
     try { await db.exec("ALTER TABLE custos ADD COLUMN nome TEXT"); } catch (e) {}
+    
+    // Novas colunas adicionadas à tabela dentistas
+    try { await db.exec("ALTER TABLE dentistas ADD COLUMN cidade TEXT"); } catch (e) {}
+    try { await db.exec("ALTER TABLE dentistas ADD COLUMN aniversario_dia INTEGER"); } catch (e) {}
+    try { await db.exec("ALTER TABLE dentistas ADD COLUMN aniversario_mes INTEGER"); } catch (e) {}
 
     const adminUser = process.env.ADMIN_USER || 'admin';
     const adminPass = process.env.ADMIN_PASS || '123456';
