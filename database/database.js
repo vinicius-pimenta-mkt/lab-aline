@@ -67,6 +67,32 @@ export const initDatabase = async () => {
       )
     `);
 
+    // ==========================================
+    // NOVAS TABELAS: MOTOBOYS E ROTAS
+    // ==========================================
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS motoboys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL UNIQUE,
+        telefone TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS motoboy_rotas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        motoboy_id INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        de_onde TEXT NOT NULL,
+        para_onde TEXT NOT NULL,
+        valor REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (motoboy_id) REFERENCES motoboys(id)
+      )
+    `);
+    // ==========================================
+
     await db.exec(`
       CREATE TABLE IF NOT EXISTS pacientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,68 +175,60 @@ export const initDatabase = async () => {
       )
     `);
 
-    // Adicione este bloco no final da função initDatabase() no arquivo database/database.js, logo após a semente de tiposProtese:
-const servicosFixos = [
-  // Diversos
-  { nome: 'Vazamento Gesso Comum', valor: 15.00 },
-  { nome: 'Vazamento Gesso Especial', valor: 25.00 },
-  { nome: 'Montagem Asa', valor: 25.00 },
-  { nome: 'Vazamento Gengiva Artificial', valor: 30.00 },
-  { nome: 'Duplicação De Modelo', valor: 30.00 },
-  { nome: 'Enceramento Diagnóstico', valor: 45.00 },
-  { nome: 'Guia Cirúrgico A Vácuo', valor: 75.00 },
-  { nome: 'Guia Cirúrgico Prensado', valor: 170.00 },
-  // Placas
-  { nome: 'Placa P/ Clareamento (Placa do dentista par)', valor: 60.00 },
-  { nome: 'Placa P/ Clareamento (Placa Dentista 1 modelo)', valor: 35.00 },
-  { nome: 'Placa clareamento par (com placa laboratório)', valor: 80.00 },
-  { nome: 'Placa Miorrelaxante A Vácuo', valor: 120.00 },
-  { nome: 'Placa Bruxismo Prensada/termo', valor: 205.00 },
-  { nome: 'Protetor Bucal P/ Prática De Esportes', valor: 120.00 },
-  // Cerômero
-  { nome: 'Cerômero - Inlay/onlay', valor: 170.00 },
-  { nome: 'Cerômero - Overlay', valor: 180.00 },
-  { nome: 'Cerômero - Coroa Total', valor: 190.00 },
-  { nome: 'Cerômero - Table Top', valor: 170.00 },
-  // Provisório
-  { nome: 'Provisório - Unitário Sob-dente', valor: 75.00 },
-  { nome: 'Provisório - Unitário Sob-Implante', valor: 85.00 },
-  // PPR
-  { nome: 'PPR - Imediata Em Acrílico', valor: 220.00 },
-  { nome: 'PPR - Estrutura Metálica', valor: 305.00 },
-  { nome: 'PPR - Montagem De Dentes', valor: 150.00 },
-  { nome: 'PPR - Acrilização Comum', valor: 220.00 },
-  { nome: 'PPR - Acrilização Caracterizada (stg)', valor: 280.00 },
-  { nome: 'PPR - Conserto', valor: 150.00 },
-  // PTR
-  { nome: 'PTR - Moldeira Individual', valor: 80.00 },
-  { nome: 'PTR - Plano De Orientação', valor: 90.00 },
-  { nome: 'PTR - Montagem Dentes', valor: 150.00 },
-  { nome: 'PTR - Prensagem Comum', valor: 220.00 },
-  { nome: 'PTR - Prensagem Caracterizada (stg)', valor: 310.00 },
-  { nome: 'PTR - Ptr Imediata', valor: 420.00 },
-  { nome: 'PTR - Reembasamento', valor: 180.00 },
-  { nome: 'PTR - Conserto', valor: 150.00 },
-  // Protocolo
-  { nome: 'Protocolo - Muralha Silicone', valor: 80.00 },
-  { nome: 'Protocolo - Barra Protocolo (4/5 Implantes)', valor: 1250.00 },
-  { nome: 'Protocolo - Solda (por ponto)', valor: 150.00 },
-  { nome: 'Protocolo - Montagem Dentes', valor: 180.00 },
-  { nome: 'Protocolo - Montagem Dentes na Barra', valor: 150.00 },
-  { nome: 'Protocolo - Prensagem Comum', valor: 280.00 },
-  { nome: 'Protocolo - Prensagem Caracterizada (stg)', valor: 320.00 }
-];
+    const servicosFixos = [
+      { nome: 'Vazamento Gesso Comum', valor: 15.00 },
+      { nome: 'Vazamento Gesso Especial', valor: 25.00 },
+      { nome: 'Montagem Asa', valor: 25.00 },
+      { nome: 'Vazamento Gengiva Artificial', valor: 30.00 },
+      { nome: 'Duplicação De Modelo', valor: 30.00 },
+      { nome: 'Enceramento Diagnóstico', valor: 45.00 },
+      { nome: 'Guia Cirúrgico A Vácuo', valor: 75.00 },
+      { nome: 'Guia Cirúrgico Prensado', valor: 170.00 },
+      { nome: 'Placa P/ Clareamento (Placa do dentista par)', valor: 60.00 },
+      { nome: 'Placa P/ Clareamento (Placa Dentista 1 modelo)', valor: 35.00 },
+      { nome: 'Placa clareamento par (com placa laboratório)', valor: 80.00 },
+      { nome: 'Placa Miorrelaxante A Vácuo', valor: 120.00 },
+      { nome: 'Placa Bruxismo Prensada/termo', valor: 205.00 },
+      { nome: 'Protetor Bucal P/ Prática De Esportes', valor: 120.00 },
+      { nome: 'Cerômero - Inlay/onlay', valor: 170.00 },
+      { nome: 'Cerômero - Overlay', valor: 180.00 },
+      { nome: 'Cerômero - Coroa Total', valor: 190.00 },
+      { nome: 'Cerômero - Table Top', valor: 170.00 },
+      { nome: 'Provisório - Unitário Sob-dente', valor: 75.00 },
+      { nome: 'Provisório - Unitário Sob-Implante', valor: 85.00 },
+      { nome: 'PPR - Imediata Em Acrílico', valor: 220.00 },
+      { nome: 'PPR - Estrutura Metálica', valor: 305.00 },
+      { nome: 'PPR - Montagem De Dentes', valor: 150.00 },
+      { nome: 'PPR - Acrilização Comum', valor: 220.00 },
+      { nome: 'PPR - Acrilização Caracterizada (stg)', valor: 280.00 },
+      { nome: 'PPR - Conserto', valor: 150.00 },
+      { nome: 'PTR - Moldeira Individual', valor: 80.00 },
+      { nome: 'PTR - Plano De Orientação', valor: 90.00 },
+      { nome: 'PTR - Montagem Dentes', valor: 150.00 },
+      { nome: 'PTR - Prensagem Comum', valor: 220.00 },
+      { nome: 'PTR - Prensagem Caracterizada (stg)', valor: 310.00 },
+      { nome: 'PTR - Ptr Imediata', valor: 420.00 },
+      { nome: 'PTR - Reembasamento', valor: 180.00 },
+      { nome: 'PTR - Conserto', valor: 150.00 },
+      { nome: 'Protocolo - Muralha Silicone', valor: 80.00 },
+      { nome: 'Protocolo - Barra Protocolo (4/5 Implantes)', valor: 1250.00 },
+      { nome: 'Protocolo - Solda (por ponto)', valor: 150.00 },
+      { nome: 'Protocolo - Montagem Dentes', valor: 180.00 },
+      { nome: 'Protocolo - Montagem Dentes na Barra', valor: 150.00 },
+      { nome: 'Protocolo - Prensagem Comum', valor: 280.00 },
+      { nome: 'Protocolo - Prensagem Caracterizada (stg)', valor: 320.00 }
+    ];
 
-for (const svc of servicosFixos) {
-  const existingSvc = await db.get('SELECT * FROM servicos_padrao WHERE nome = ?', svc.nome);
-  if (!existingSvc) {
-    await db.run(
-      'INSERT INTO servicos_padrao (nome, valor_padrao, ativo) VALUES (?, ?, 1)',
-      [svc.nome, svc.valor]
-    );
-  }
-}
-console.log('Serviços pré-fixados de prótese alinhados com sucesso!');
+    for (const svc of servicosFixos) {
+      const existingSvc = await db.get('SELECT * FROM servicos_padrao WHERE nome = ?', svc.nome);
+      if (!existingSvc) {
+        await db.run(
+          'INSERT INTO servicos_padrao (nome, valor_padrao, ativo) VALUES (?, ?, 1)',
+          [svc.nome, svc.valor]
+        );
+      }
+    }
+    console.log('Serviços pré-fixados de prótese alinhados com sucesso!');
 
     // ==========================================
     // MIGRAÇÕES DE SEGURANÇA (CORRIGE O ERRO 500)
