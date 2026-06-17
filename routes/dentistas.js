@@ -32,18 +32,18 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo dentista
+// Criar novo dentista (Agora incluindo Cidade e Aniversário)
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { nome, telefone, email, cpf } = req.body;
+    const { nome, telefone, email, cpf, cidade, aniversario_dia, aniversario_mes } = req.body;
 
     if (!nome) {
       return res.status(400).json({ error: 'Nome é obrigatório' });
     }
 
     const result = await query(
-      'INSERT INTO dentistas (nome, telefone, email, cpf) VALUES (?, ?, ?, ?)',
-      [nome, telefone || null, email || null, cpf || null]
+      'INSERT INTO dentistas (nome, telefone, email, cpf, cidade, aniversario_dia, aniversario_mes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [nome, telefone || null, email || null, cpf || null, cidade || null, aniversario_dia || null, aniversario_mes || null]
     );
 
     res.status(201).json({
@@ -63,7 +63,7 @@ router.post('/', verifyToken, async (req, res) => {
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, telefone, email, cpf } = req.body;
+    const { nome, telefone, email, cpf, cidade, aniversario_dia, aniversario_mes } = req.body;
 
     const dentista = await get('SELECT * FROM dentistas WHERE id = ?', [id]);
     if (!dentista) {
@@ -71,8 +71,17 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
 
     await query(
-      'UPDATE dentistas SET nome = ?, telefone = ?, email = ?, cpf = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [nome || dentista.nome, telefone || dentista.telefone, email || dentista.email, cpf || dentista.cpf, id]
+      'UPDATE dentistas SET nome = ?, telefone = ?, email = ?, cpf = ?, cidade = ?, aniversario_dia = ?, aniversario_mes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [
+        nome || dentista.nome, 
+        telefone || dentista.telefone, 
+        email || dentista.email, 
+        cpf || dentista.cpf,
+        cidade !== undefined ? cidade : dentista.cidade,
+        aniversario_dia !== undefined ? aniversario_dia : dentista.aniversario_dia,
+        aniversario_mes !== undefined ? aniversario_mes : dentista.aniversario_mes,
+        id
+      ]
     );
 
     res.json({ message: 'Dentista atualizado com sucesso' });
