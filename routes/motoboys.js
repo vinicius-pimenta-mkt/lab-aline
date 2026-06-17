@@ -1,0 +1,63 @@
+import express from 'express';
+import { all, query } from '../database/database.js';
+import { verifyToken } from './auth.js';
+
+const router = express.Router();
+
+// 1. Listar Motoboys
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const motoboys = await all('SELECT * FROM motoboys ORDER BY nome ASC');
+    res.json(motoboys);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar motoboys' });
+  }
+});
+
+// 2. Criar Motoboy
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const { nome, telefone } = req.body;
+    if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
+
+    const result = await query('INSERT INTO motoboys (nome, telefone) VALUES (?, ?)', [nome, telefone || null]);
+    res.status(201).json({ message: 'Motoboy criado', id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar motoboy' });
+  }
+});
+
+// 3. Listar Rotas
+router.get('/rotas', verifyToken, async (req, res) => {
+  try {
+    const rotas = await all(`
+      SELECT r.*, m.nome as motoboy_nome 
+      FROM motoboy_rotas r 
+      JOIN motoboys m ON r.motoboy_id = m.id 
+      ORDER BY r.data DESC
+    `);
+    res.json(rotas);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar rotas' });
+  }
+});
+
+// 4. Criar Rota (Corrida)
+router.post('/rotas', verifyToken, async (req, res) => {
+  try {
+    const { motoboy_id, data, de_onde, para_onde, valor } = req.body;
+    if (!motoboy_id || !data || !de_onde || !para_onde || valor === undefined) {
+      return res.status(400).json({ error: 'Preencha todos os campos da rota' });
+    }
+
+    const result = await query(
+      'INSERT INTO motoboy_rotas (motoboy_id, data, de_onde, para_onde, valor) VALUES (?, ?, ?, ?, ?)',
+      [motoboy_id, data, de_onde, para_onde, valor]
+    );
+    res.status(201).json({ message: 'Rota criada', id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao registrar rota' });
+  }
+});
+
+export default router;
