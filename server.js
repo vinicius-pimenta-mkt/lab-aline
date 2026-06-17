@@ -14,6 +14,7 @@ import tiposProtesesRoutes from './routes/tipos-protese.js';
 import servicosPadraoRoutes from './routes/servicos-padrao.js';
 import pdfRoutes from './routes/pdf.js';
 import anexosRoutes from './routes/anexos.js';
+import motoboysRoutes from './routes/motoboys.js';
 
 // Importar inicialização do banco
 import { initDatabase } from './database/database.js';
@@ -56,6 +57,7 @@ app.use('/api/tipos-protese', tiposProtesesRoutes);
 app.use('/api/servicos-padrao', servicosPadraoRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/anexos', anexosRoutes);
+app.use('/api/motoboys', motoboysRoutes);
 
 // Rota 404 para APIs não encontradas
 app.use('*', (req, res) => {
