@@ -13,6 +13,13 @@ services:
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASS: ${ADMIN_PASS}
       JWT_SECRET: ${JWT_SECRET}
+      # Força o banco de dados a ser guardado dentro da pasta segura do volume
+      DB_PATH: /app/data/labprotese.db
     volumes:
-      - ./data:/app/data
+      # Utiliza o Volume Nomeado em vez de uma pasta local sujeita a ser apagada
+      - labprotese_dados:/app/data
     restart: always
+
+# Declaração do Volume Nomeado (Isto cria a "pen drive virtual" permanente)
+volumes:
+  labprotese_dados:
