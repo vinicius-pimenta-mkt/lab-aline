@@ -245,6 +245,21 @@ export const initDatabase = async () => {
     try { await db.exec("ALTER TABLE dentistas ADD COLUMN cidade TEXT"); } catch (e) {}
     try { await db.exec("ALTER TABLE dentistas ADD COLUMN aniversario_dia INTEGER"); } catch (e) {}
     try { await db.exec("ALTER TABLE dentistas ADD COLUMN aniversario_mes INTEGER"); } catch (e) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS tsb_pacientes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          nome TEXT NOT NULL,
+          telefone TEXT,
+          procedimento TEXT,
+          recorrencia_meses INTEGER DEFAULT 4,
+          data_inicio TEXT,
+          ultimo_atendimento TEXT,
+          proximo_atendimento TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    } catch (e) { console.error(e) }
 
     const adminUser = process.env.ADMIN_USER || 'admin';
     const adminPass = process.env.ADMIN_PASS || '123456';
