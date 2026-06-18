@@ -59,6 +59,7 @@ app.use('/api/servicos-padrao', servicosPadraoRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/anexos', anexosRoutes);
 app.use('/api/motoboys', motoboysRoutes);
+app.use('/api/tsb', tsbRoutes);
 
 // Rota 404 para APIs não encontradas
 app.use('*', (req, res) => {
