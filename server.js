@@ -15,6 +15,7 @@ import servicosPadraoRoutes from './routes/servicos-padrao.js';
 import pdfRoutes from './routes/pdf.js';
 import anexosRoutes from './routes/anexos.js';
 import motoboysRoutes from './routes/motoboys.js';
+import tsbRoutes from './routes/tsb.js';
 
 // Importar inicialização do banco
 import { initDatabase } from './database/database.js';
