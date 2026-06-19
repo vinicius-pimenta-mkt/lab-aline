@@ -1,9 +1,40 @@
 import express from 'express';
 import { all, query } from '../database/database.js';
 import { verifyToken } from './auth.js';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
+// ==========================================
+// 1. ROTA DE LOGIN EXCLUSIVA DO TSB
+// ==========================================
+router.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Credenciais de acesso exclusivas da Clínica (Pode alterar como quiser aqui)
+    const tsbUser = process.env.TSB_USER || 'aline';
+    const tsbPass = process.env.TSB_PASS || 'tsb123';
+
+    if (username === tsbUser && password === tsbPass) {
+      // Gera um token específico para o TSB válido por 7 dias
+      const token = jwt.sign(
+        { id: 999, username: tsbUser, role: 'tsb' }, 
+        process.env.JWT_SECRET || 'secreto_padrao', 
+        { expiresIn: '7d' }
+      );
+      return res.json({ token, user: { username: tsbUser, role: 'tsb' } });
+    }
+
+    return res.status(401).json({ error: 'Usuário ou senha incorretos para a Clínica TSB.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao fazer login no TSB' });
+  }
+});
+
+// ==========================================
+// 2. ROTAS DO SISTEMA (Protegidas)
+// ==========================================
 // Listar todos os pacientes de TSB
 router.get('/', verifyToken, async (req, res) => {
   try {
