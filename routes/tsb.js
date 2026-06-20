@@ -1,12 +1,36 @@
 import express from 'express';
 import { all, query } from '../database/database.js';
-import { verifyToken } from './auth.js';
 import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
 // ==========================================
-// 1. ROTA DE LOGIN EXCLUSIVA DO TSB (O 404 era por falta disso!)
+// MIDDLEWARE DE SEGURANÇA EXCLUSIVO DO TSB
+// ==========================================
+// Este verificador não procura utilizadores na tabela do laboratório, 
+// ele apenas valida se a chave pertence à Clínica (role: 'tsb').
+const verifyTsbToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secreto_padrao');
+    
+    // Verifica se o token pertence realmente ao TSB
+    if (decoded.role !== 'tsb') {
+      return res.status(401).json({ error: 'Acesso não autorizado para a Clínica' });
+    }
+    
+    req.user = decoded;
+    next(); // Chave válida, pode passar!
+  } catch (error) {
+    return res.status(401).json({ error: 'Sessão inválida ou expirada' });
+  }
+};
+
+// ==========================================
+// 1. ROTA DE LOGIN EXCLUSIVA DO TSB
 // ==========================================
 router.post('/login', async (req, res) => {
   try {
@@ -17,6 +41,7 @@ router.post('/login', async (req, res) => {
     const tsbPass = process.env.TSB_PASS || 'tsb123';
 
     if (username === tsbUser && password === tsbPass) {
+      // Cria a chave (token) carimbada com "role: tsb"
       const token = jwt.sign(
         { id: 999, username: tsbUser, role: 'tsb' }, 
         process.env.JWT_SECRET || 'secreto_padrao', 
@@ -34,7 +59,9 @@ router.post('/login', async (req, res) => {
 // ==========================================
 // 2. ROTAS DO SISTEMA DE PACIENTES
 // ==========================================
-router.get('/', verifyToken, async (req, res) => {
+
+// Listar todos os pacientes de TSB (Usando o novo verifyTsbToken!)
+router.get('/', verifyTsbToken, async (req, res) => {
   try {
     const pacientes = await all('SELECT * FROM tsb_pacientes ORDER BY proximo_atendimento ASC');
     res.json(pacientes);
@@ -43,7 +70,8 @@ router.get('/', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/', verifyToken, async (req, res) => {
+// Cadastrar novo paciente TSB (Usando o novo verifyTsbToken!)
+router.post('/', verifyTsbToken, async (req, res) => {
   try {
     const { nome, telefone, procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
     
