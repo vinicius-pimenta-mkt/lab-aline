@@ -16,6 +16,7 @@ import pdfRoutes from './routes/pdf.js';
 import anexosRoutes from './routes/anexos.js';
 import motoboysRoutes from './routes/motoboys.js';
 import tsbRoutes from './routes/tsb.js';
+import colaboradoresRoutes from './routes/colaboradores.js';
 
 // Importar inicialização do banco
 import { initDatabase } from './database/database.js';
@@ -60,6 +61,7 @@ app.use('/api/pdf', pdfRoutes);
 app.use('/api/anexos', anexosRoutes);
 app.use('/api/motoboys', motoboysRoutes);
 app.use('/api/tsb', tsbRoutes);
+app.use('/api/colaboradores', colaboradoresRoutes);
 
 // Rota 404 para APIs não encontradas
 app.use('*', (req, res) => {
