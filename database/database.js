@@ -261,6 +261,32 @@ export const initDatabase = async () => {
       `);
     } catch (e) { console.error(e) }
 
+    // ==========================================
+    // MIGRAÇÕES DE COLABORADORES E PONTO
+    // ==========================================
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS colaboradores (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          nome TEXT NOT NULL,
+          telefone TEXT,
+          cargo TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS colaborador_ponto (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          colaborador_id INTEGER,
+          data TEXT NOT NULL,
+          entrada TEXT,
+          saida TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (colaborador_id) REFERENCES colaboradores (id) ON DELETE CASCADE
+        )
+      `);
+    } catch (e) { console.error('Erro ao criar tabelas de RH:', e); }
+
     const adminUser = process.env.ADMIN_USER || 'admin';
     const adminPass = process.env.ADMIN_PASS || '123456';
 
