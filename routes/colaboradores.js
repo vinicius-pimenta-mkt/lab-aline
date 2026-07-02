@@ -76,4 +76,20 @@ router.post('/pagamento', verifyToken, async (req, res) => {
   }
 });
 
+// Deletar Colaborador e o seu histórico de ponto
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // 1. Limpa os pontos do colaborador
+    await query('DELETE FROM colaborador_ponto WHERE colaborador_id = ?', [id]);
+    // 2. Exclui o colaborador
+    await query('DELETE FROM colaboradores WHERE id = ?', [id]);
+    
+    res.json({ message: 'Colaborador e histórico excluídos com sucesso' });
+  } catch (err) { 
+    console.error("Erro ao deletar colaborador:", err);
+    res.status(500).json({error: 'Erro ao excluir colaborador'}); 
+  }
+});
+
 export default router;
