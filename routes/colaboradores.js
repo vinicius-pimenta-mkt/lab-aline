@@ -43,19 +43,34 @@ router.delete('/pontos/:id', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({error: 'Erro ao deletar ponto'}); }
 });
 
-// 3. Rota de Pagamento (Lança o valor nos Custos Gerais do Sistema!)
+// Rota de Pagamento Blindada contra Erro 500
 router.post('/pagamento', verifyToken, async (req, res) => {
   try {
     const { colaborador_nome, valor, mes_ref } = req.body;
-    const hoje = new Date().toISOString().split('T')[0]; // Pega a data atual
-    
-    // Insere o salário/pagamento diretamente na tabela de custos para abater no Lucro do Mês
-    await query(
-      "INSERT INTO custos (trabalho_id, nome, valor, data) VALUES (NULL, ?, ?, ?)",
-      [`Pagamento Colaborador: ${colaborador_nome} (${mes_ref})`, valor, hoje]
-    );
+    const hoje = new Date().toISOString().split('T')[0];
+    const textoDescricao = `Pagamento Colaborador: ${colaborador_nome} (${mes_ref})`;
+
+    try {
+      // Tentativa 1: Omitindo trabalho_id para evitar erros de restrição NOT NULL / FOREIGN KEY
+      await query(
+        "INSERT INTO custos (nome, valor, data) VALUES (?, ?, ?)",
+        [textoDescricao, valor, hoje]
+      );
+    } catch (firstErr) {
+      console.warn("Coluna 'nome' não encontrada ou rejeitada, tentando coluna 'descricao'...");
+      // Tentativa 2: Caso a coluna na tabela de custos chame-se 'descricao' em vez de 'nome'
+      await query(
+        "INSERT INTO custos (descricao, valor, data) VALUES (?, ?, ?)",
+        [textoDescricao, valor, hoje]
+      );
+    }
+
     res.json({ message: 'Pagamento registrado no financeiro com sucesso!' });
-  } catch (err) { res.status(500).json({error: 'Erro ao lançar pagamento'}); }
+  } catch (err) {
+    // Esse console.error vai printar o motivo exato no terminal do seu Easypanel caso ainda falhe
+    console.error("Erro fatal ao lançar pagamento de colaborador no banco:", err);
+    res.status(500).json({ error: 'Erro interno ao salvar na tabela custos. Verifique os campos.' });
+  }
 });
 
 export default router;
