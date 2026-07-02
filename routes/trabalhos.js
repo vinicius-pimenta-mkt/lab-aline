@@ -64,7 +64,7 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo trabalho salvando os custos dinâmicos na tabela vinculada
+// Criar novo trabalho salvando os custos dinâmicos na tabela vinculada e lidando com múltiplos itens
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
@@ -84,11 +84,12 @@ router.post('/', verifyToken, async (req, res) => {
       observacoes,
       etapas,
       status,
-      costs // Recebe a lista de custos individualizados do front-end
+      costs,
+      proceduresList // CAMPO NOVO: Para receber os múltiplos procedimentos da tela
     } = req.body;
 
-    if (!paciente_nome || !dentista_nome || !procedimento || !valor_bruto) {
-      return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+    if (!paciente_nome || !dentista_nome) {
+      return res.status(400).json({ error: 'Paciente e Dentista são campos obrigatórios' });
     }
 
     let paciente = await get('SELECT id FROM pacientes WHERE nome = ?', [paciente_nome.trim()]);
@@ -97,53 +98,75 @@ router.post('/', verifyToken, async (req, res) => {
     let dentista = await get('SELECT id FROM dentistas WHERE nome = ?', [dentista_nome.trim()]);
     let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
 
-    const vb = parseFloat(valor_bruto) || 0;
-    const co = parseFloat(custo_operacional) || 0;
-    const lucro_liquido = vb - co;
     const entradaData = data_entrada || new Date().toISOString().split('T')[0];
 
-    const result = await query(
-      `INSERT INTO trabalhos (
-        paciente_id, dentista_id, tipo_protese_id, descricao, procedimento, 
-        data_entrada, data_saida, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
-        lucro_liquido, forma_pagamento, resumo_trabalho, observacoes, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        paciente_id, dentista_id, tipo_protese_id || null, descricao || '', procedimento,
-        entradaData, data_saida || null, prazo_entrega || null,
-        prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
-        resumo_trabalho || null, observacoes || null, status || 'Pendente'
-      ]
-    );
+    // Mapear procedimentos: Se vier da nova lista (proceduresList), usa ela. Se vier da tela antiga, usa o procedimento único.
+    let itensParaInserir = [];
+    if (proceduresList && Array.isArray(proceduresList) && proceduresList.length > 0) {
+      itensParaInserir = proceduresList.filter(item => item.procedure?.trim());
+    } else if (procedimento?.trim()) {
+      itensParaInserir = [{ procedure: procedimento, grossValue: valor_bruto }];
+    }
 
-    const trabalhoId = result.lastID;
+    if (itensParaInserir.length === 0) {
+      return res.status(400).json({ error: 'Nenhum procedimento/serviço foi informado' });
+    }
 
-    // Gravar custos individualizados na tabela custos para popular os relatórios
-    if (costs && Array.isArray(costs)) {
-      for (let cost of costs) {
-        const nomeCusto = cost.name?.trim() || cost.descricao?.trim();
-        if (nomeCusto) {
-          await query(
-            `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
-            [trabalhoId, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, entradaData]
-          );
+    const idsCriados = [];
+
+    // Faz um loop inserindo cada procedimento como um "trabalho" vinculado ao mesmo paciente/dentista
+    for (let idx = 0; idx < itensParaInserir.length; idx++) {
+      const item = itensParaInserir[idx];
+      const vb = parseFloat(item.grossValue) || 0;
+      
+      // IMPORTANTE: Para não duplicar os custos passados no formulário, atrelamos eles APENAS ao 1º item da lista
+      const co = (idx === 0) ? (parseFloat(custo_operacional) || 0) : 0;
+      const lucro_liquido = vb - co;
+
+      const result = await query(
+        `INSERT INTO trabalhos (
+          paciente_id, dentista_id, tipo_protese_id, descricao, procedimento, 
+          data_entrada, data_saida, prazo_entrega, prioridade, valor_bruto, custo_operacional, 
+          lucro_liquido, forma_pagamento, resumo_trabalho, observacoes, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          paciente_id, dentista_id, tipo_protese_id || null, descricao || '', item.procedure.trim(),
+          entradaData, data_saida || null, prazo_entrega || null,
+          prioridade || 'normal', vb, co, lucro_liquido, forma_pagamento || null,
+          resumo_trabalho || null, observacoes || null, status || 'Pendente'
+        ]
+      );
+
+      const trabalhoId = result.lastID;
+      idsCriados.push(trabalhoId);
+
+      // Gravar custos individualizados na tabela custos (SOMENTE no primeiro item)
+      if (idx === 0 && costs && Array.isArray(costs)) {
+        for (let cost of costs) {
+          const nomeCusto = cost.name?.trim() || cost.descricao?.trim();
+          if (nomeCusto) {
+            await query(
+              `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
+              [trabalhoId, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, entradaData]
+            );
+          }
+        }
+      }
+
+      // Gravar as etapas de produção para CADA item (assim cada prótese terá seu controle independente de "Pendente, Em Andamento", etc)
+      if (etapas && Array.isArray(etapas)) {
+        for (let i = 0; i < etapas.length; i++) {
+          if (etapas[i].nome?.trim()) {
+            await query(
+              `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+              [trabalhoId, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
+            );
+          }
         }
       }
     }
 
-    // Gravar etapas vinculadas
-    if (etapas && Array.isArray(etapas)) {
-      for (let i = 0; i < etapas.length; i++) {
-        if (etapas[i].nome?.trim()) {
-          await query(
-            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
-            [trabalhoId, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
-          );
-        }
-      }
-    }
-
-    res.status(201).json({ message: 'Trabalho criado com sucesso', id: trabalhoId });
+    res.status(201).json({ message: 'Trabalhos criados com sucesso', id: idsCriados[0], ids: idsCriados });
   } catch (error) {
     console.error('Erro ao criar trabalho:', error);
     res.status(500).json({ error: 'Erro interno ao criar trabalho' });
@@ -225,7 +248,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
     const trabalho = await get('SELECT * FROM trabalhos WHERE id = ?', [id]);
     if (!trabalho) return res.status(404).json({ error: 'Trabalho não encontrado' });
 
-    await query('DELETE FROM etapas WHERE trabajo_id = ?', [id]);
+    await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM custos WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM anexos WHERE trabalho_id = ?', [id]);
     await query('DELETE FROM trabalhos WHERE id = ?', [id]);
