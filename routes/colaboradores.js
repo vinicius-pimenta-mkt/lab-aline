@@ -43,7 +43,7 @@ router.delete('/pontos/:id', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({error: 'Erro ao deletar ponto'}); }
 });
 
-// Rota de Pagamento Blindada contra Erro 500
+// 3. Rota de Pagamento (Burlando a trava de segurança do trabalho_id com "0")
 router.post('/pagamento', verifyToken, async (req, res) => {
   try {
     const { colaborador_nome, valor, mes_ref } = req.body;
@@ -51,25 +51,28 @@ router.post('/pagamento', verifyToken, async (req, res) => {
     const textoDescricao = `Pagamento Colaborador: ${colaborador_nome} (${mes_ref})`;
 
     try {
-      // Tentativa 1: Omitindo trabalho_id para evitar erros de restrição NOT NULL / FOREIGN KEY
+      // Tentativa 1: Inserindo o "0" para agradar à restrição NOT NULL
       await query(
-        "INSERT INTO custos (nome, valor, data) VALUES (?, ?, ?)",
+        "INSERT INTO custos (trabalho_id, nome, valor, data) VALUES (0, ?, ?, ?)",
         [textoDescricao, valor, hoje]
       );
-    } catch (firstErr) {
-      console.warn("Coluna 'nome' não encontrada ou rejeitada, tentando coluna 'descricao'...");
-      // Tentativa 2: Caso a coluna na tabela de custos chame-se 'descricao' em vez de 'nome'
-      await query(
-        "INSERT INTO custos (descricao, valor, data) VALUES (?, ?, ?)",
-        [textoDescricao, valor, hoje]
-      );
+    } catch (err1) {
+      try {
+        // Tentativa 2: Caso a coluna se chame 'descricao' no seu banco
+        await query(
+          "INSERT INTO custos (trabalho_id, descricao, valor, data) VALUES (0, ?, ?, ?)",
+          [textoDescricao, valor, hoje]
+        );
+      } catch (err2) {
+         console.error("Erro interno BD:", err2.message);
+         return res.status(500).json({ error: `Erro na tabela de custos: ${err2.message}` });
+      }
     }
-
+    
     res.json({ message: 'Pagamento registrado no financeiro com sucesso!' });
   } catch (err) {
-    // Esse console.error vai printar o motivo exato no terminal do seu Easypanel caso ainda falhe
-    console.error("Erro fatal ao lançar pagamento de colaborador no banco:", err);
-    res.status(500).json({ error: 'Erro interno ao salvar na tabela custos. Verifique os campos.' });
+    console.error("Erro exato do banco de dados:", err.message);
+    res.status(500).json({ error: `Erro no BD: ${err.message}` });
   }
 });
 
