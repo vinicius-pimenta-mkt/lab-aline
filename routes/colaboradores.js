@@ -43,7 +43,7 @@ router.delete('/pontos/:id', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({error: 'Erro ao deletar ponto'}); }
 });
 
-// 3. Rota de Pagamento (Burlando a trava de segurança do trabalho_id com "0")
+// 3. Rota de Pagamento (Com trabalho_id e tipo definidos!)
 router.post('/pagamento', verifyToken, async (req, res) => {
   try {
     const { colaborador_nome, valor, mes_ref } = req.body;
@@ -51,16 +51,16 @@ router.post('/pagamento', verifyToken, async (req, res) => {
     const textoDescricao = `Pagamento Colaborador: ${colaborador_nome} (${mes_ref})`;
 
     try {
-      // Tentativa 1: Inserindo o "0" para agradar à restrição NOT NULL
+      // Tentativa 1: Inserindo "0" no trabalho_id e "Operacional" no tipo
       await query(
-        "INSERT INTO custos (trabalho_id, nome, valor, data) VALUES (0, ?, ?, ?)",
+        "INSERT INTO custos (trabalho_id, nome, valor, data, tipo) VALUES (0, ?, ?, ?, 'Operacional')",
         [textoDescricao, valor, hoje]
       );
     } catch (err1) {
       try {
-        // Tentativa 2: Caso a coluna se chame 'descricao' no seu banco
+        // Tentativa 2: Caso a coluna de texto se chame 'descricao' no seu banco
         await query(
-          "INSERT INTO custos (trabalho_id, descricao, valor, data) VALUES (0, ?, ?, ?)",
+          "INSERT INTO custos (trabalho_id, descricao, valor, data, tipo) VALUES (0, ?, ?, ?, 'Operacional')",
           [textoDescricao, valor, hoje]
         );
       } catch (err2) {
