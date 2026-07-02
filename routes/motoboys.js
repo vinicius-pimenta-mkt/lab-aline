@@ -60,4 +60,20 @@ router.post('/rotas', verifyToken, async (req, res) => {
   }
 });
 
+// Deletar Motoboy e as suas corridas
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // 1. Limpa as rotas do motoboy
+    await query('DELETE FROM motoboy_rotas WHERE motoboy_id = ?', [id]);
+    // 2. Exclui o motoboy
+    await query('DELETE FROM motoboys WHERE id = ?', [id]);
+    
+    res.json({ message: 'Motoboy e rotas excluídos com sucesso' });
+  } catch (err) { 
+    console.error("Erro ao deletar motoboy:", err);
+    res.status(500).json({error: 'Erro ao excluir motoboy'}); 
+  }
+});
+
 export default router;
