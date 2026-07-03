@@ -181,6 +181,7 @@ export const initDatabase = async () => {
       { nome: 'Montagem Asa', valor: 25.00 },
       { nome: 'Vazamento Gengiva Artificial', valor: 30.00 },
       { nome: 'Duplicação De Modelo', valor: 30.00 },
+      { nome: 'Contenção a Vácuo', valor: 60.00 },
       { nome: 'Enceramento Diagnóstico', valor: 45.00 },
       { nome: 'Guia Cirúrgico A Vácuo', valor: 75.00 },
       { nome: 'Guia Cirúrgico Prensado', valor: 170.00 },
