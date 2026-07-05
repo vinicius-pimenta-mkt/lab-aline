@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/', verifyToken, async (req, res) => {
   try {
     const { status, data_inicio, data_fim, dentista_id, prioridade } = req.query;
-    let queryText = `SELECT t.*, p.nome as paciente_nome, d.nome as dentista_nome, tp.nome as tipo_protese_nome 
+    let queryText = `SELECT t.*, p.nome as paciente_nome, p.telefone as paciente_telefone, d.nome as dentista_nome, tp.nome as tipo_protese_nome 
                      FROM trabalhos t 
                      LEFT JOIN pacientes p ON t.paciente_id = p.id 
                      LEFT JOIN dentistas d ON t.dentista_id = d.id 
