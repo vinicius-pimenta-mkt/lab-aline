@@ -32,30 +32,34 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo dentista (Agora incluindo Cidade e Aniversário)
+// Criar ou Atualizar Dentista (Impede duplicatas da tela de Parceiros)
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { nome, telefone, email, cpf, cidade, aniversario_dia, aniversario_mes } = req.body;
+    const { nome, telefone, cidade, aniversario_dia, aniversario_mes } = req.body;
+    
+    if (!nome) return res.status(400).json({ error: 'O nome é obrigatório' });
 
-    if (!nome) {
-      return res.status(400).json({ error: 'Nome é obrigatório' });
+    // 1. Verifica se já existe (usando TRIM e LIKE para ignorar espaços ocultos e maiúsculas)
+    const dentistaExistente = await get('SELECT id FROM dentistas WHERE TRIM(nome) LIKE ?', [nome.trim()]);
+    
+    if (dentistaExistente) {
+      // Se a Aline tentar cadastrar alguém que já existe, apenas ATUALIZA os dados em vez de duplicar
+      await query(
+        'UPDATE dentistas SET telefone = ?, cidade = ?, aniversario_dia = ?, aniversario_mes = ? WHERE id = ?',
+        [telefone || '', cidade || '', aniversario_dia || null, aniversario_mes || null, dentistaExistente.id]
+      );
+      return res.json({ id: dentistaExistente.id, message: 'Dentista atualizado com sucesso' });
     }
 
+    // 2. Se não existir, cria a ficha limpa
     const result = await query(
-      'INSERT INTO dentistas (nome, telefone, email, cpf, cidade, aniversario_dia, aniversario_mes) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [nome, telefone || null, email || null, cpf || null, cidade || null, aniversario_dia || null, aniversario_mes || null]
+      'INSERT INTO dentistas (nome, telefone, cidade, aniversario_dia, aniversario_mes) VALUES (?, ?, ?, ?, ?)',
+      [nome.trim(), telefone || '', cidade || '', aniversario_dia || null, aniversario_mes || null]
     );
-
-    res.status(201).json({
-      message: 'Dentista criado com sucesso',
-      id: result.lastID
-    });
+    res.json({ id: result.lastID, message: 'Dentista criado com sucesso' });
   } catch (error) {
-    console.error('Erro ao criar dentista:', error);
-    if (error.message.includes('UNIQUE constraint failed')) {
-      return res.status(400).json({ error: 'CPF já cadastrado' });
-    }
-    res.status(500).json({ error: 'Erro ao criar dentista' });
+    console.error('Erro ao criar parceiro:', error);
+    res.status(500).json({ error: 'Erro interno ao salvar parceiro' });
   }
 });
 
