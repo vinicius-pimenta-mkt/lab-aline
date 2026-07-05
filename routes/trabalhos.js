@@ -93,9 +93,21 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Paciente e Dentista são campos obrigatórios' });
     }
 
-    // BUSCA BLINDADA CONTRA DUPLICATAS (Ignora espaços ocultos e sensibilidade de letras)
-    let paciente = await get('SELECT id FROM pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
-    let paciente_id = paciente ? paciente.id : (await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()])).lastID;
+    // BUSCA BLINDADA DO PACIENTE E ATUALIZAÇÃO DO TELEFONE
+    let paciente = await get('SELECT id, telefone FROM pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
+    let paciente_id;
+    
+    if (paciente) {
+      paciente_id = paciente.id;
+      // Se a Aline digitou um telefone novo, atualiza a ficha do paciente
+      if (paciente_telefone && paciente_telefone !== paciente.telefone) {
+        await query('UPDATE pacientes SET telefone = ? WHERE id = ?', [paciente_telefone, paciente_id]);
+      }
+    } else {
+      // Se o paciente não existe, cria ele já com o telefone
+      const rPac = await query('INSERT INTO pacientes (nome, telefone) VALUES (?, ?)', [paciente_nome.trim(), paciente_telefone || '']);
+      paciente_id = rPac.lastID;
+    }
 
     let dentista = await get('SELECT id FROM dentistas WHERE TRIM(nome) LIKE ?', [dentista_nome.trim()]);
     let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
