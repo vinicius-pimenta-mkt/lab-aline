@@ -92,10 +92,11 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Paciente e Dentista são campos obrigatórios' });
     }
 
-    let paciente = await get('SELECT id FROM pacientes WHERE nome = ?', [paciente_nome.trim()]);
+    // BUSCA BLINDADA CONTRA DUPLICATAS (Ignora espaços ocultos e sensibilidade de letras)
+    let paciente = await get('SELECT id FROM pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
     let paciente_id = paciente ? paciente.id : (await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()])).lastID;
 
-    let dentista = await get('SELECT id FROM dentistas WHERE nome = ?', [dentista_nome.trim()]);
+    let dentista = await get('SELECT id FROM dentistas WHERE TRIM(nome) LIKE ?', [dentista_nome.trim()]);
     let dentista_id = dentista ? dentista.id : (await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()])).lastID;
 
     const entradaData = data_entrada || new Date().toISOString().split('T')[0];
