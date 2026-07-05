@@ -69,6 +69,7 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
       paciente_nome, 
+      paciente_telefone,
       dentista_nome, 
       tipo_protese_id, 
       descricao, 
