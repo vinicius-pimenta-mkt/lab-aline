@@ -8,18 +8,6 @@ const router = express.Router();
 const garantirColunas = async () => {
   try { await query("ALTER TABLE trabalhos ADD COLUMN data_saida TEXT"); } catch (e) {}
   try { await query("ALTER TABLE trabalhos ADD COLUMN forma_pagamento TEXT"); } catch (e) {}
-  // --- INJEÇÃO 1: Garante que a tabela de despesas gerais exista ---
-  try { 
-    await query(`CREATE TABLE IF NOT EXISTS despesas_gerais (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      descricao TEXT NOT NULL,
-      valor REAL NOT NULL,
-      data TEXT NOT NULL,
-      tipo TEXT DEFAULT 'Geral',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`); 
-  } catch (e) {}
-  // ------------------------------------------------------------------
 };
 
 // 1. Dashboard corrigido selecionando todas as propriedades para evitar erros de undefined (.toString)
@@ -40,10 +28,10 @@ router.get('/dashboard', verifyToken, async (req, res) => {
     const lucroLiquido = await get('SELECT SUM(lucro_liquido) as total FROM trabalhos WHERE status = "Finalizado"');
     const receitaPendente = await get('SELECT SUM(valor_bruto) as total FROM trabalhos WHERE status IN ("Pendente", "Em Andamento")');
     
-    // --- INJEÇÃO 2: ABATER DESPESAS GERAIS NO DASHBOARD INICIAL ---
+    // --- AJUSTE: SUBTRAÇÃO DE DESPESAS GERAIS NO LUCRO DO DASHBOARD ---
     const despesasGeraisTotal = await get('SELECT SUM(valor) as total FROM despesas_gerais');
     const lucroRealDashboard = (lucroLiquido?.total || 0) - (despesasGeraisTotal?.total || 0);
-    // --------------------------------------------------------------
+    // ------------------------------------------------------------------
     
     const servicosAtrasados = await get(`
       SELECT COUNT(*) as total FROM trabalhos 
@@ -97,7 +85,7 @@ router.get('/dashboard', verifyToken, async (req, res) => {
         emAndamento: emAndamento?.total || 0,
         receitaPeriodo: receitaPeriodo?.total || 0,
         finalizados: finalizados?.total || 0,
-        lucroLiquido: lucroRealDashboard, // <-- ATUALIZADO: envia a nova variável
+        lucroLiquido: lucroRealDashboard, // <-- Variável atualizada com a dedução
         receitaPendente: receitaPendente?.total || 0,
         servicosAtrasados: servicosAtrasados?.total || 0,
         proximasEntregas: proximasEntregas?.total || 0
@@ -304,21 +292,24 @@ router.get('/completo', verifyToken, async (req, res) => {
       AND IFNULL(data_saida, data_entrada) BETWEEN ? AND ?
     `, [dIni, dFim]);
 
-    // --- INJEÇÃO 3: ADICIONAR E ABATER DESPESAS GERAIS NO RELATÓRIO COMPLETO ---
-    // 1. Pega as despesas gerais daquele mesmo período
-    const despesasGeraisPeriodo = await get(`SELECT SUM(valor) as total FROM despesas_gerais WHERE data BETWEEN ? AND ?`, [dIni, dFim]);
-    const totalDespesasGerais = despesasGeraisPeriodo?.total || 0;
+    // --- ENQUADRAMENTO DE DESPESAS GERAIS NO PERÍODO ---
+    const despesasGeraisLista = await all(`
+      SELECT id, descricao, valor, data 
+      FROM despesas_gerais 
+      WHERE data BETWEEN ? AND ?
+      ORDER BY data DESC
+    `, [dataInicio.toISOString().split('T')[0], hoje.toISOString().split('T')[0]]);
+
+    const totalDespesasGerais = despesasGeraisLista.reduce((acc, curr) => acc + (curr.valor || 0), 0);
 
     const receitaFinalPeriodo = totals?.revenue || 0;
     const custoFinalPeriodo = (totals?.cost || 0) + totalDespesasGerais;
     const lucroFinalPeriodo = (totals?.profit || 0) - totalDespesasGerais;
 
-    // 2. Adiciona a fatia de despesas no Gráfico de Pizza
     if (totalDespesasGerais > 0) {
       costsDistribution.push({ name: 'Despesas Gerais (Lab)', value: totalDespesasGerais });
     }
 
-    // 3. Pega as despesas por mês para incluir certinho no Gráfico de Barras
     const despesasMensaisGerais = await all(`
       SELECT strftime('%Y-%m', data) as month, SUM(valor) as total_mes
       FROM despesas_gerais
@@ -335,7 +326,7 @@ router.get('/completo', verifyToken, async (req, res) => {
         profit: (d.profit || 0) - valorDespMes
       };
     });
-    // ---------------------------------------------------------------------------
+    // --------------------------------------------------
 
     if (costsDistribution.length === 0 && totals?.cost > 0) {
       costsDistribution.push({ name: 'Custos Gerais', value: totals.cost });
@@ -343,10 +334,11 @@ router.get('/completo', verifyToken, async (req, res) => {
 
     res.json({
       completedServices,
-      monthlyData: adjustedMonthlyData.map(d => ({ month: d.month, revenue: d.revenue || 0, cost: d.cost || 0, profit: d.profit || 0 })), // <-- ATUALIZADO
+      despesasGerais: despesasGeraisLista, // Retorna a lista para o ecrã
+      monthlyData: adjustedMonthlyData.map(d => ({ month: d.month, revenue: d.revenue || 0, cost: d.cost || 0, profit: d.profit || 0 })),
       costsDistribution: costsDistribution.map(c => ({ name: c.name, value: c.value || 0 })),
       paymentMethods: paymentMethods.map(p => ({ name: p.name, value: p.value || 0, count: p.count || 0 })),
-      totals: { revenue: receitaFinalPeriodo, cost: custoFinalPeriodo, profit: lucroFinalPeriodo } // <-- ATUALIZADO
+      totals: { revenue: receitaFinalPeriodo, cost: custoFinalPeriodo, profit: lucroFinalPeriodo }
     });
 
   } catch (error) {
