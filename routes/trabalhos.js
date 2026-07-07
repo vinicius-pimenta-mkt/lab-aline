@@ -187,11 +187,12 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// Atualizar trabalho sincronizando custos dinâmicos
+// Atualizar trabalho sincronizando custos dinâmicos e permitindo edição de Paciente/Dentista
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { 
+      paciente_nome, dentista_nome, // <-- INJEÇÃO: Agora o backend recebe os nomes editados
       descricao, procedimento, status, data_saida, valor_bruto, custo_operacional, 
       prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
       observacoes, etapas, costs
@@ -202,17 +203,43 @@ router.put('/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'Trabalho não encontrado' });
     }
 
+    // --- INJEÇÃO: BUSCA OU CRIA O PACIENTE EDITADO ---
+    let paciente_id = trabalho.paciente_id;
+    if (paciente_nome) {
+      let paciente = await get('SELECT id FROM pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
+      if (paciente) {
+        paciente_id = paciente.id;
+      } else {
+        const rPac = await query('INSERT INTO pacientes (nome) VALUES (?)', [paciente_nome.trim()]);
+        paciente_id = rPac.lastID;
+      }
+    }
+
+    // --- INJEÇÃO: BUSCA OU CRIA O DENTISTA EDITADO ---
+    let dentista_id = trabalho.dentista_id;
+    if (dentista_nome) {
+      let dentista = await get('SELECT id FROM dentistas WHERE TRIM(nome) LIKE ?', [dentista_nome.trim()]);
+      if (dentista) {
+        dentista_id = dentista.id;
+      } else {
+        const rDent = await query('INSERT INTO dentistas (nome) VALUES (?)', [dentista_nome.trim()]);
+        dentista_id = rDent.lastID;
+      }
+    }
+
     const vb = valor_bruto !== undefined ? parseFloat(valor_bruto) : trabalho.valor_bruto;
     const co = custo_operacional !== undefined ? parseFloat(custo_operacional) : trabalho.custo_operacional;
     const lucro_liquido = vb - co;
 
     await query(
       `UPDATE trabalhos SET 
+        paciente_id = ?, dentista_id = ?, -- <-- INJEÇÃO: Atualiza as chaves no banco
         descricao = ?, procedimento = ?, status = ?, data_saida = ?, valor_bruto = ?, custo_operacional = ?, 
         lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, 
         resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [
+        paciente_id, dentista_id, // <-- INJEÇÃO
         descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
         data_saida !== undefined ? data_saida : trabalho.data_saida,
         vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
@@ -230,19 +257,6 @@ router.put('/:id', verifyToken, async (req, res) => {
           await query(
             `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
             [id, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, trabalho.data_entrada]
-          );
-        }
-      }
-    }
-
-    // Sincronizar etapas
-    if (etapas && Array.isArray(etapas)) {
-      await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
-      for (let i = 0; i < etapas.length; i++) {
-        if (etapas[i].nome?.trim()) {
-          await query(
-            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
-            [id, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
           );
         }
       }
