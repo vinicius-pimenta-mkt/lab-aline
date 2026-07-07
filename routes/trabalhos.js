@@ -64,7 +64,7 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// Criar novo trabalho salvando os custos dinâmicos na tabela vinculada e lidando com múltiplos itens
+// Criar novo trabalho
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
@@ -86,7 +86,7 @@ router.post('/', verifyToken, async (req, res) => {
       etapas,
       status,
       costs,
-      proceduresList // CAMPO NOVO: Para receber os múltiplos procedimentos da tela
+      proceduresList
     } = req.body;
 
     if (!paciente_nome || !dentista_nome) {
@@ -99,12 +99,10 @@ router.post('/', verifyToken, async (req, res) => {
     
     if (paciente) {
       paciente_id = paciente.id;
-      // Se a Aline digitou um telefone novo, atualiza a ficha do paciente
       if (paciente_telefone && paciente_telefone !== paciente.telefone) {
         await query('UPDATE pacientes SET telefone = ? WHERE id = ?', [paciente_telefone, paciente_id]);
       }
     } else {
-      // Se o paciente não existe, cria ele já com o telefone
       const rPac = await query('INSERT INTO pacientes (nome, telefone) VALUES (?, ?)', [paciente_nome.trim(), paciente_telefone || '']);
       paciente_id = rPac.lastID;
     }
@@ -114,7 +112,6 @@ router.post('/', verifyToken, async (req, res) => {
 
     const entradaData = data_entrada || new Date().toISOString().split('T')[0];
 
-    // Mapear procedimentos: Se vier da nova lista (proceduresList), usa ela. Se vier da tela antiga, usa o procedimento único.
     let itensParaInserir = [];
     if (proceduresList && Array.isArray(proceduresList) && proceduresList.length > 0) {
       itensParaInserir = proceduresList.filter(item => item.procedure?.trim());
@@ -128,12 +125,9 @@ router.post('/', verifyToken, async (req, res) => {
 
     const idsCriados = [];
 
-    // Faz um loop inserindo cada procedimento como um "trabalho" vinculado ao mesmo paciente/dentista
     for (let idx = 0; idx < itensParaInserir.length; idx++) {
       const item = itensParaInserir[idx];
       const vb = parseFloat(item.grossValue) || 0;
-      
-      // IMPORTANTE: Para não duplicar os custos passados no formulário, atrelamos eles APENAS ao 1º item da lista
       const co = (idx === 0) ? (parseFloat(custo_operacional) || 0) : 0;
       const lucro_liquido = vb - co;
 
@@ -154,7 +148,6 @@ router.post('/', verifyToken, async (req, res) => {
       const trabalhoId = result.lastID;
       idsCriados.push(trabalhoId);
 
-      // Gravar custos individualizados na tabela custos (SOMENTE no primeiro item)
       if (idx === 0 && costs && Array.isArray(costs)) {
         for (let cost of costs) {
           const nomeCusto = cost.name?.trim() || cost.descricao?.trim();
@@ -167,7 +160,6 @@ router.post('/', verifyToken, async (req, res) => {
         }
       }
 
-      // Gravar as etapas de produção para CADA item (assim cada prótese terá seu controle independente de "Pendente, Em Andamento", etc)
       if (etapas && Array.isArray(etapas)) {
         for (let i = 0; i < etapas.length; i++) {
           if (etapas[i].nome?.trim()) {
@@ -187,12 +179,12 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// Atualizar trabalho sincronizando custos dinâmicos e permitindo edição de Paciente/Dentista
+// Atualizar trabalho sincronizando custos dinâmicos E permitindo edição de Paciente/Dentista
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      paciente_nome, dentista_nome, // <-- INJEÇÃO: Agora o backend recebe os nomes editados
+      paciente_nome, dentista_nome, // <-- ADICIONADO PARA CORREÇÃO
       descricao, procedimento, status, data_saida, valor_bruto, custo_operacional, 
       prazo_entrega, prioridade, forma_pagamento, resumo_trabalho, 
       observacoes, etapas, costs
@@ -203,7 +195,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'Trabalho não encontrado' });
     }
 
-    // --- INJEÇÃO: BUSCA OU CRIA O PACIENTE EDITADO ---
+    // --- LÓGICA ADICIONADA: Busca ou Atualiza o Paciente corrigido pela Aline ---
     let paciente_id = trabalho.paciente_id;
     if (paciente_nome) {
       let paciente = await get('SELECT id FROM pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
@@ -215,7 +207,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    // --- INJEÇÃO: BUSCA OU CRIA O DENTISTA EDITADO ---
+    // --- LÓGICA ADICIONADA: Busca ou Atualiza o Dentista corrigido pela Aline ---
     let dentista_id = trabalho.dentista_id;
     if (dentista_nome) {
       let dentista = await get('SELECT id FROM dentistas WHERE TRIM(nome) LIKE ?', [dentista_nome.trim()]);
@@ -233,13 +225,13 @@ router.put('/:id', verifyToken, async (req, res) => {
 
     await query(
       `UPDATE trabalhos SET 
-        paciente_id = ?, dentista_id = ?, -- <-- INJEÇÃO: Atualiza as chaves no banco
+        paciente_id = ?, dentista_id = ?, -- <-- ADICIONADO AQUI
         descricao = ?, procedimento = ?, status = ?, data_saida = ?, valor_bruto = ?, custo_operacional = ?, 
         lucro_liquido = ?, prazo_entrega = ?, prioridade = ?, forma_pagamento = ?, 
         resumo_trabalho = ?, observacoes = ?, updated_at = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [
-        paciente_id, dentista_id, // <-- INJEÇÃO
+        paciente_id, dentista_id, // <-- E AQUI
         descricao || trabalho.descricao, procedimento || trabalho.procedimento, status || trabalho.status,
         data_saida !== undefined ? data_saida : trabalho.data_saida,
         vb, co, lucro_liquido, prazo_entrega || trabalho.prazo_entrega, prioridade || trabalho.prioridade,
@@ -257,6 +249,19 @@ router.put('/:id', verifyToken, async (req, res) => {
           await query(
             `INSERT INTO custos (trabalho_id, descricao, tipo, valor, data) VALUES (?, ?, ?, ?, ?)`,
             [id, nomeCusto, 'Operacional', parseFloat(cost.value) || 0, trabalho.data_entrada]
+          );
+        }
+      }
+    }
+
+    // Sincronizar etapas
+    if (etapas && Array.isArray(etapas)) {
+      await query('DELETE FROM etapas WHERE trabalho_id = ?', [id]);
+      for (let i = 0; i < etapas.length; i++) {
+        if (etapas[i].nome?.trim()) {
+          await query(
+            `INSERT INTO etapas (trabalho_id, nome, descricao, status, ordem) VALUES (?, ?, ?, ?, ?)`,
+            [id, etapas[i].nome.trim(), etapas[i].descricao || '', etapas[i].status || 'pending', i]
           );
         }
       }
