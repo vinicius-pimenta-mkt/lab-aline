@@ -76,4 +76,32 @@ router.delete('/:id', verifyToken, async (req, res) => {
   }
 });
 
+// 5. Atualizar Rota (Edição)
+router.put('/rotas/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motoboy_id, data, de_onde, para_onde, valor } = req.body;
+    
+    await query(
+      'UPDATE motoboy_rotas SET motoboy_id = ?, data = ?, de_onde = ?, para_onde = ?, valor = ? WHERE id = ?',
+      [motoboy_id, data, de_onde, para_onde, valor, id]
+    );
+    res.json({ message: 'Rota atualizada com sucesso' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao atualizar rota' });
+  }
+});
+
+// 6. Excluir Rota Específica
+router.delete('/rotas/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query('DELETE FROM motoboy_rotas WHERE id = ?', [id]);
+    res.json({ message: 'Rota excluída com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir rota' });
+  }
+});
+
 export default router;
