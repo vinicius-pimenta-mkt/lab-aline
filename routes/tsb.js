@@ -168,10 +168,12 @@ router.get('/atendimentos', verifyTsbToken, async (req, res) => {
 });
 
 // Registrar atendimento com múltiplos procedimentos e valores customizáveis
+// Registrar atendimento com múltiplos procedimentos e automação de retorno
 router.post('/atendimentos', verifyTsbToken, async (req, res) => {
   try {
     await garantirTabelasAtendimento();
-    const { paciente_nome, paciente_telefone, data, descricao, procedimentos } = req.body;
+    // INJEÇÃO: Recebendo a variável proximo_retorno_meses
+    const { paciente_nome, paciente_telefone, data, descricao, procedimentos, proximo_retorno_meses } = req.body;
 
     if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
       return res.status(400).json({ error: 'Preencha os dados do paciente e selecione os procedimentos.' });
@@ -192,8 +194,32 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
       );
     }
 
+    // --- INJEÇÃO: AUTOMATIZAÇÃO DO CONTROLE DE RETORNOS (ABA 1) ---
+    if (proximo_retorno_meses && parseInt(proximo_retorno_meses) > 0) {
+      const meses = parseInt(proximo_retorno_meses);
+      const dataUltimo = new Date(data + 'T00:00:00');
+      const dataProximo = new Date(dataUltimo);
+      dataProximo.setMonth(dataProximo.getMonth() + meses);
+      const novoProximoStr = dataProximo.toISOString().split('T')[0];
+
+      // Tenta achar se o paciente já existe na lista de retornos
+      const pacienteExistente = await get('SELECT id FROM tsb_pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
+      
+      if (pacienteExistente) {
+        // Se existe, apenas atualiza a data do novo retorno
+        await query('UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ?, recorrencia_meses = ? WHERE id = ?', 
+          [data, novoProximoStr, meses, pacienteExistente.id]);
+      } else {
+        // Se é um paciente novo, cria o card de retorno dele automaticamente
+        await query(`INSERT INTO tsb_pacientes (nome, telefone, procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [paciente_nome.trim(), paciente_telefone || '', 'Prevenção / Rotina', meses, data, data, novoProximoStr]);
+      }
+    }
+    // --------------------------------------------------------------
+
     res.status(201).json({ message: 'Atendimento registrado com sucesso', id: atendimentoId });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Erro ao registrar atendimento TSB' });
   }
 });
