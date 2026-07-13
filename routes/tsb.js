@@ -238,7 +238,6 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
     let ultimo_proc_str = "";
     let ultimo_valor = 0;
 
-    // Constrói a string e a soma do que foi selecionado na edição
     if (procedimentos_realizados && procedimentos_realizados.length > 0) {
       ultimo_proc_str = procedimentos_realizados.map(p => p.name).join(', ');
       ultimo_valor = procedimentos_realizados.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
@@ -252,8 +251,9 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
       [nome.trim(), telefone || '', procedimento, ultimo_proc_str, ultimo_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
     );
 
-    // Lança automaticamente no relatório financeiro se os dados existirem e não estiver lançado
+    // MÁGICA DE SINCRONIZAÇÃO: Se editou um atendimento, espelha no Financeiro (Aba 2)
     if (procedimentos_realizados && procedimentos_realizados.length > 0 && ultimo_atendimento) {
+      // Verifica se já existe um registro financeiro para este paciente nesta data
       const atFinan = await get('SELECT id FROM tsb_atendimentos WHERE paciente_nome = ? AND data = ?', [nome.trim(), ultimo_atendimento]);
       
       if (!atFinan) {
@@ -270,7 +270,7 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
       }
     }
 
-    res.json({ message: 'Paciente atualizado com sucesso' });
+    res.json({ message: 'Paciente atualizado e sincronizado' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Erro ao atualizar paciente TSB' });
