@@ -5,117 +5,12 @@ import jwt from 'jsonwebtoken';
 const router = express.Router();
 
 // ==========================================
-// MIDDLEWARE DE SEGURANÇA (Original Intacto)
+// GARANTIA DE TABELAS E COLUNAS
 // ==========================================
-const verifyTsbToken = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
-
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secreto_padrao');
-    if (decoded.role !== 'tsb') return res.status(401).json({ error: 'Acesso não autorizado para a Clínica' });
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Sessão inválida ou expirada' });
-  }
-};
-
-// ==========================================
-// 1. ROTA DE LOGIN EXCLUSIVA DO TSB (Original)
-// ==========================================
-router.post('/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const tsbUser = process.env.TSB_USER || 'aline';
-    const tsbPass = process.env.TSB_PASS || 'tsb123';
-
-    if (username === tsbUser && password === tsbPass) {
-      const token = jwt.sign(
-        { username, role: 'tsb' },
-        process.env.JWT_SECRET || 'secreto_padrao',
-        { expiresIn: '24h' }
-      );
-      return res.json({ token });
-    }
-    res.status(401).json({ error: 'Usuário ou senha incorretos' });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao fazer login' });
-  }
-});
-
-// Listar todos os pacientes do TSB (Original Intacto)
-router.get('/', verifyTsbToken, async (req, res) => {
-  try {
-    const pacientes = await all('SELECT * FROM tsb_pacientes ORDER BY nome ASC');
-    res.json(pacientes);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao listar pacientes TSB' });
-  }
-});
-
-// Criar paciente do TSB (Original Intacto)
-router.post('/', verifyTsbToken, async (req, res) => {
-  try {
-    const { nome, telefone, procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
-    if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
-
-    const result = await query(
-      `INSERT INTO tsb_pacientes (nome, telefone, procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [nome, telefone || '', procedimento || '', recorrencia_meses || 6, data_inicio, ultimo_atendimento, proximo_atendimento]
-    );
-    res.status(201).json({ message: 'Paciente criado com sucesso', id: result.lastID });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao criar paciente TSB' });
-  }
-});
-
-// Rota para Renovar 1 Clique (Original Intacto)
-router.put('/:id/renovar', verifyTsbToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const paciente = await get('SELECT * FROM tsb_pacientes WHERE id = ?', [id]);
-    if (!paciente) return res.status(404).json({ error: 'Paciente não encontrado' });
-
-    const dataUltimo = new Date(paciente.proximo_atendimento + 'T00:00:00');
-    const dataProximo = new Date(dataUltimo);
-    dataProximo.setMonth(dataProximo.getMonth() + paciente.recorrencia_meses);
-
-    const novoUltimoStr = dataUltimo.toISOString().split('T')[0];
-    const novoProximoStr = dataProximo.toISOString().split('T')[0];
-
-    await query(
-      'UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ? WHERE id = ?',
-      [novoUltimoStr, novoProximoStr, id]
-    );
-
-    res.json({ message: 'Atendimento renovado com sucesso' });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao renovar paciente' });
-  }
-});
-
-// Rota para Apagar Paciente (Original Intacto)
-router.delete('/:id', verifyTsbToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const paciente = await get('SELECT * FROM tsb_pacientes WHERE id = ?', [id]);
-    if (!paciente) return res.status(404).json({ error: 'Paciente não encontrado' });
-
-    await query('DELETE FROM tsb_pacientes WHERE id = ?', [id]);
-    res.json({ message: 'Paciente deletado com sucesso' });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao apagar paciente' });
-  }
-});
-
-
-// =========================================================================
-// INJEÇÃO: GESTÃO FINANCEIRA E ATENDIMENTOS TSB (SOLICITAÇÃO ALINE)
-// =========================================================================
-
-const garantirTabelasAtendimento = async () => {
+const garantirTabelasTsb = async () => {
+  // Garante a nova coluna de histórico clínico no TSB
+  try { await query("ALTER TABLE tsb_pacientes ADD COLUMN ultimo_procedimento TEXT"); } catch (e) {}
+  
   try {
     await query(`
       CREATE TABLE IF NOT EXISTS tsb_atendimentos (
@@ -142,10 +37,152 @@ const garantirTabelasAtendimento = async () => {
   }
 };
 
-// Listar atendimentos financeiros com os filtros de data exatos solicitados
+// ==========================================
+// MIDDLEWARE DE SEGURANÇA
+// ==========================================
+const verifyTsbToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secreto_padrao');
+    if (decoded.role !== 'tsb') return res.status(401).json({ error: 'Acesso não autorizado para a Clínica' });
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Sessão inválida ou expirada' });
+  }
+};
+
+// ==========================================
+// ROTA DE LOGIN EXCLUSIVA DO TSB
+// ==========================================
+router.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const tsbUser = process.env.TSB_USER || 'aline';
+    const tsbPass = process.env.TSB_PASS || 'tsb123';
+
+    if (username === tsbUser && password === tsbPass) {
+      const token = jwt.sign(
+        { username, role: 'tsb' },
+        process.env.JWT_SECRET || 'secreto_padrao',
+        { expiresIn: '24h' }
+      );
+      return res.json({ token });
+    }
+    res.status(401).json({ error: 'Usuário ou senha incorretos' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao fazer login' });
+  }
+});
+
+// =========================================================================
+// GESTÃO DE PACIENTES E RECORRÊNCIAS (ABA 1)
+// =========================================================================
+
+// Listar todos os pacientes do TSB
+router.get('/', verifyTsbToken, async (req, res) => {
+  await garantirTabelasTsb();
+  try {
+    const pacientes = await all('SELECT * FROM tsb_pacientes ORDER BY nome ASC');
+    res.json(pacientes);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar pacientes TSB' });
+  }
+});
+
+// Criar paciente do TSB
+router.post('/', verifyTsbToken, async (req, res) => {
+  await garantirTabelasTsb();
+  try {
+    const { nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
+    if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
+
+    const result = await query(
+      `INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [nome.trim(), telefone || '', procedimento || '', ultimo_procedimento || '', recorrencia_meses || 6, data_inicio, ultimo_atendimento, proximo_atendimento]
+    );
+    res.status(201).json({ message: 'Paciente criado com sucesso', id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar paciente TSB' });
+  }
+});
+
+// Atualizar dados cadastrais do paciente TSB (Edição da Aba 1)
+router.put('/:id', verifyTsbToken, async (req, res) => {
+  await garantirTabelasTsb();
+  try {
+    const { id } = req.params;
+    const { nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
+
+    if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
+
+    await query(
+      `UPDATE tsb_pacientes SET 
+        nome = ?, telefone = ?, procedimento = ?, ultimo_procedimento = ?,
+        recorrencia_meses = ?, data_inicio = ?, ultimo_atendimento = ?, proximo_atendimento = ?
+       WHERE id = ?`,
+      [nome.trim(), telefone || '', procedimento, ultimo_procedimento || '', recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
+    );
+
+    res.json({ message: 'Paciente atualizado com sucesso' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao atualizar paciente TSB' });
+  }
+});
+
+// Rota para Renovar 1 Clique
+router.put('/:id/renovar', verifyTsbToken, async (req, res) => {
+  await garantirTabelasTsb();
+  try {
+    const { id } = req.params;
+    const paciente = await get('SELECT * FROM tsb_pacientes WHERE id = ?', [id]);
+    if (!paciente) return res.status(404).json({ error: 'Paciente não encontrado' });
+
+    const dataUltimo = new Date(paciente.proximo_atendimento + 'T00:00:00');
+    const dataProximo = new Date(dataUltimo);
+    dataProximo.setMonth(dataProximo.getMonth() + paciente.recorrencia_meses);
+
+    const novoUltimoStr = dataUltimo.toISOString().split('T')[0];
+    const novoProximoStr = dataProximo.toISOString().split('T')[0];
+
+    await query(
+      'UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ? WHERE id = ?',
+      [novoUltimoStr, novoProximoStr, id]
+    );
+
+    res.json({ message: 'Atendimento renovado com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao renovar paciente' });
+  }
+});
+
+// Rota para Apagar Paciente
+router.delete('/:id', verifyTsbToken, async (req, res) => {
+  await garantirTabelasTsb();
+  try {
+    const { id } = req.params;
+    const paciente = await get('SELECT * FROM tsb_pacientes WHERE id = ?', [id]);
+    if (!paciente) return res.status(404).json({ error: 'Paciente não encontrado' });
+
+    await query('DELETE FROM tsb_pacientes WHERE id = ?', [id]);
+    res.json({ message: 'Paciente deletado com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao apagar paciente' });
+  }
+});
+
+// =========================================================================
+// GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2)
+// =========================================================================
+
+// Listar atendimentos financeiros
 router.get('/atendimentos', verifyTsbToken, async (req, res) => {
   try {
-    await garantirTabelasAtendimento();
+    await garantirTabelasTsb();
     const { periodo = 'mes' } = req.query;
     
     let condition = "";
@@ -167,12 +204,10 @@ router.get('/atendimentos', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Registrar atendimento com múltiplos procedimentos e valores customizáveis
 // Registrar atendimento com múltiplos procedimentos e automação de retorno
 router.post('/atendimentos', verifyTsbToken, async (req, res) => {
   try {
-    await garantirTabelasAtendimento();
-    // INJEÇÃO: Recebendo a variável proximo_retorno_meses
+    await garantirTabelasTsb();
     const { paciente_nome, paciente_telefone, data, descricao, procedimentos, proximo_retorno_meses } = req.body;
 
     if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
@@ -187,6 +222,9 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
     );
     const atendimentoId = result.lastID;
 
+    // Define qual foi o procedimento principal para registrar no histórico
+    const procPrincipal = procedimentos[0]?.name || 'Prevenção / Rotina';
+
     for (let proc of procedimentos) {
       await query(
         `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
@@ -194,7 +232,7 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
       );
     }
 
-    // --- INJEÇÃO: AUTOMATIZAÇÃO DO CONTROLE DE RETORNOS (ABA 1) ---
+    // AUTOMATIZAÇÃO DO CONTROLE DE RETORNOS (ABA 1)
     if (proximo_retorno_meses && parseInt(proximo_retorno_meses) > 0) {
       const meses = parseInt(proximo_retorno_meses);
       const dataUltimo = new Date(data + 'T00:00:00');
@@ -202,20 +240,16 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
       dataProximo.setMonth(dataProximo.getMonth() + meses);
       const novoProximoStr = dataProximo.toISOString().split('T')[0];
 
-      // Tenta achar se o paciente já existe na lista de retornos
       const pacienteExistente = await get('SELECT id FROM tsb_pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
       
       if (pacienteExistente) {
-        // Se existe, apenas atualiza a data do novo retorno
-        await query('UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ?, recorrencia_meses = ? WHERE id = ?', 
-          [data, novoProximoStr, meses, pacienteExistente.id]);
+        await query('UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ?, recorrencia_meses = ?, ultimo_procedimento = ? WHERE id = ?', 
+          [data, novoProximoStr, meses, procPrincipal, pacienteExistente.id]);
       } else {
-        // Se é um paciente novo, cria o card de retorno dele automaticamente
-        await query(`INSERT INTO tsb_pacientes (nome, telefone, procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [paciente_nome.trim(), paciente_telefone || '', 'Prevenção / Rotina', meses, data, data, novoProximoStr]);
+        await query(`INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [paciente_nome.trim(), paciente_telefone || '', procPrincipal, procPrincipal, meses, data, data, novoProximoStr]);
       }
     }
-    // --------------------------------------------------------------
 
     res.status(201).json({ message: 'Atendimento registrado com sucesso', id: atendimentoId });
   } catch (error) {
@@ -227,7 +261,7 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
 // Editar Atendimento TSB
 router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   try {
-    await garantirTabelasAtendimento();
+    await garantirTabelasTsb();
     const { id } = req.params;
     const { paciente_nome, paciente_telefone, data, descricao, procedimentos } = req.body;
 
