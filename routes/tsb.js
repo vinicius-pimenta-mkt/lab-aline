@@ -9,6 +9,7 @@ const router = express.Router();
 // ==========================================
 const garantirTabelasTsb = async () => {
   try { await query("ALTER TABLE tsb_pacientes ADD COLUMN ultimo_procedimento TEXT"); } catch (e) {}
+  try { await query("ALTER TABLE tsb_pacientes ADD COLUMN ultimo_valor REAL DEFAULT 0"); } catch (e) {}
   
   try {
     await query(`
@@ -71,6 +72,130 @@ router.post('/login', async (req, res) => {
   }
 });
 
+
+// =========================================================================
+// GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2) - Colocadas acima para não conflitar
+// =========================================================================
+
+router.get('/atendimentos', verifyTsbToken, async (req, res) => {
+  try {
+    await garantirTabelasTsb();
+    const { periodo = 'mes' } = req.query;
+    
+    let condition = "";
+    if (periodo === 'hoje') condition = "AND data = date('now', 'localtime')";
+    else if (periodo === 'ontem') condition = "AND data = date('now', '-1 day', 'localtime')";
+    else if (periodo === 'semana') condition = "AND data >= date('now', '-7 days', 'localtime')";
+    else if (periodo === 'mes') condition = "AND data >= date('now', '-30 days', 'localtime')";
+    else if (periodo === '3meses') condition = "AND data >= date('now', '-90 days', 'localtime')";
+
+    const atendimentos = await all(`SELECT * FROM tsb_atendimentos WHERE 1=1 ${condition} ORDER BY data DESC, id DESC`);
+    
+    for (let at of atendimentos) {
+      at.procedimentos = await all(`SELECT procedimento_nome as name, valor as value FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [at.id]);
+    }
+    
+    res.json(atendimentos);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar atendimentos TSB' });
+  }
+});
+
+router.post('/atendimentos', verifyTsbToken, async (req, res) => {
+  try {
+    await garantirTabelasTsb();
+    const { paciente_nome, paciente_telefone, data, descricao, procedimentos, proximo_retorno_meses } = req.body;
+
+    if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
+      return res.status(400).json({ error: 'Preencha os dados do paciente e selecione os procedimentos.' });
+    }
+
+    const valor_total = procedimentos.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
+
+    const result = await query(
+      `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
+      [paciente_nome.trim(), paciente_telefone || '', data, descricao || '', valor_total]
+    );
+    const atendimentoId = result.lastID;
+
+    const procPrincipal = procedimentos.map(p => p.name).join(', ');
+
+    for (let proc of procedimentos) {
+      await query(
+        `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+        [atendimentoId, proc.name, parseFloat(proc.value) || 0]
+      );
+    }
+
+    if (proximo_retorno_meses && parseInt(proximo_retorno_meses) > 0) {
+      const meses = parseInt(proximo_retorno_meses);
+      const dataUltimo = new Date(data + 'T00:00:00');
+      const dataProximo = new Date(dataUltimo);
+      dataProximo.setMonth(dataProximo.getMonth() + meses);
+      const novoProximoStr = dataProximo.toISOString().split('T')[0];
+
+      const pacienteExistente = await get('SELECT id FROM tsb_pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
+      
+      if (pacienteExistente) {
+        await query('UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ?, recorrencia_meses = ?, ultimo_procedimento = ?, ultimo_valor = ? WHERE id = ?', 
+          [data, novoProximoStr, meses, procPrincipal, valor_total, pacienteExistente.id]);
+      } else {
+        await query(`INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, ultimo_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [paciente_nome.trim(), paciente_telefone || '', 'Prevenção / Rotina', procPrincipal, valor_total, meses, data, data, novoProximoStr]);
+      }
+    }
+
+    res.status(201).json({ message: 'Atendimento registrado com sucesso', id: atendimentoId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao registrar atendimento TSB' });
+  }
+});
+
+router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
+  try {
+    await garantirTabelasTsb();
+    const { id } = req.params;
+    const { paciente_nome, paciente_telefone, data, descricao, procedimentos } = req.body;
+
+    if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
+      return res.status(400).json({ error: 'Dados obrigatórios ausentes.' });
+    }
+
+    const valor_total = procedimentos.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
+
+    await query(
+      `UPDATE tsb_atendimentos SET paciente_nome = ?, paciente_telefone = ?, data = ?, descricao = ?, valor_total = ? WHERE id = ?`,
+      [paciente_nome.trim(), paciente_telefone || '', data, descricao || '', valor_total, id]
+    );
+
+    await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [id]);
+    for (let proc of procedimentos) {
+      await query(
+        `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+        [id, proc.name, parseFloat(proc.value) || 0]
+      );
+    }
+
+    res.json({ message: 'Atendimento atualizado com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar atendimento TSB' });
+  }
+});
+
+// A rota de deletar foi ajustada para não sofrer colisão com a deleção de pacientes
+router.delete('/atendimentos/:id', verifyTsbToken, async (req, res) => {
+  try {
+    await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [req.params.id]);
+    await query(`DELETE FROM tsb_atendimentos WHERE id = ?`, [req.params.id]);
+    res.json({ message: 'Atendimento excluído com sucesso' });
+  } catch (error) {
+    console.error("Erro deletando:", error);
+    res.status(500).json({ error: 'Erro ao excluir atendimento TSB' });
+  }
+});
+
+
 // =========================================================================
 // GESTÃO DE PACIENTES E RECORRÊNCIAS (ABA 1)
 // =========================================================================
@@ -101,37 +226,47 @@ router.post('/', verifyTsbToken, async (req, res) => {
   }
 });
 
-// --- ATUALIZAÇÃO IMPORTANTE: SINCRONIZAÇÃO AUTOMÁTICA COM O FINANCEIRO AO EDITAR ---
+// Edição de Paciente com Integração aos Procedimentos Fixos e Sincronização
 router.put('/:id', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
     const { id } = req.params;
-    const { nome, telefone, procedimento, ultimo_procedimento, ultimo_procedimento_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
+    const { nome, telefone, procedimento, procedimentos_realizados, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
 
     if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
 
+    let ultimo_proc_str = "";
+    let ultimo_valor = 0;
+
+    // Constrói a string e a soma do que foi selecionado na edição
+    if (procedimentos_realizados && procedimentos_realizados.length > 0) {
+      ultimo_proc_str = procedimentos_realizados.map(p => p.name).join(', ');
+      ultimo_valor = procedimentos_realizados.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
+    }
+
     await query(
       `UPDATE tsb_pacientes SET 
-        nome = ?, telefone = ?, procedimento = ?, ultimo_procedimento = ?,
+        nome = ?, telefone = ?, procedimento = ?, ultimo_procedimento = ?, ultimo_valor = ?,
         recorrencia_meses = ?, data_inicio = ?, ultimo_atendimento = ?, proximo_atendimento = ?
        WHERE id = ?`,
-      [nome.trim(), telefone || '', procedimento, ultimo_procedimento || '', recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
+      [nome.trim(), telefone || '', procedimento, ultimo_proc_str, ultimo_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
     );
 
-    // Se a Aline inseriu um "Último Procedimento", o sistema injeta no relatório financeiro automaticamente
-    if (ultimo_procedimento && ultimo_atendimento) {
+    // Lança automaticamente no relatório financeiro se os dados existirem e não estiver lançado
+    if (procedimentos_realizados && procedimentos_realizados.length > 0 && ultimo_atendimento) {
       const atFinan = await get('SELECT id FROM tsb_atendimentos WHERE paciente_nome = ? AND data = ?', [nome.trim(), ultimo_atendimento]);
       
       if (!atFinan) {
-        const valor = ultimo_procedimento_valor || 0;
         const resAt = await query(
           `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
-          [nome.trim(), telefone || '', ultimo_atendimento, 'Importado do Histórico de Retornos', valor]
+          [nome.trim(), telefone || '', ultimo_atendimento, 'Sincronizado da Aba de Recorrência', ultimo_valor]
         );
-        await query(
-          `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
-          [resAt.lastID, ultimo_procedimento, valor]
-        );
+        for (let p of procedimentos_realizados) {
+          await query(
+            `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+            [resAt.lastID, p.name, parseFloat(p.value)]
+          );
+        }
       }
     }
 
@@ -178,126 +313,6 @@ router.delete('/:id', verifyTsbToken, async (req, res) => {
     res.json({ message: 'Paciente deletado com sucesso' });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao apagar paciente' });
-  }
-});
-
-// =========================================================================
-// GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2)
-// =========================================================================
-
-router.get('/atendimentos', verifyTsbToken, async (req, res) => {
-  try {
-    await garantirTabelasTsb();
-    const { periodo = 'mes' } = req.query;
-    
-    let condition = "";
-    if (periodo === 'hoje') condition = "AND data = date('now', 'localtime')";
-    else if (periodo === 'ontem') condition = "AND data = date('now', '-1 day', 'localtime')";
-    else if (periodo === 'semana') condition = "AND data >= date('now', '-7 days', 'localtime')";
-    else if (periodo === 'mes') condition = "AND data >= date('now', '-30 days', 'localtime')";
-    else if (periodo === '3meses') condition = "AND data >= date('now', '-90 days', 'localtime')";
-
-    const atendimentos = await all(`SELECT * FROM tsb_atendimentos WHERE 1=1 ${condition} ORDER BY data DESC, id DESC`);
-    
-    for (let at of atendimentos) {
-      at.procedimentos = await all(`SELECT procedimento_nome as name, valor as value FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [at.id]);
-    }
-    
-    res.json(atendimentos);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao listar atendimentos TSB' });
-  }
-});
-
-router.post('/atendimentos', verifyTsbToken, async (req, res) => {
-  try {
-    await garantirTabelasTsb();
-    const { paciente_nome, paciente_telefone, data, descricao, procedimentos, proximo_retorno_meses } = req.body;
-
-    if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
-      return res.status(400).json({ error: 'Preencha os dados do paciente e selecione os procedimentos.' });
-    }
-
-    const valor_total = procedimentos.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
-
-    const result = await query(
-      `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
-      [paciente_nome.trim(), paciente_telefone || '', data, descricao || '', valor_total]
-    );
-    const atendimentoId = result.lastID;
-
-    const procPrincipal = procedimentos[0]?.name || 'Prevenção / Rotina';
-
-    for (let proc of procedimentos) {
-      await query(
-        `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
-        [atendimentoId, proc.name, parseFloat(proc.value) || 0]
-      );
-    }
-
-    if (proximo_retorno_meses && parseInt(proximo_retorno_meses) > 0) {
-      const meses = parseInt(proximo_retorno_meses);
-      const dataUltimo = new Date(data + 'T00:00:00');
-      const dataProximo = new Date(dataUltimo);
-      dataProximo.setMonth(dataProximo.getMonth() + meses);
-      const novoProximoStr = dataProximo.toISOString().split('T')[0];
-
-      const pacienteExistente = await get('SELECT id FROM tsb_pacientes WHERE TRIM(nome) LIKE ?', [paciente_nome.trim()]);
-      
-      if (pacienteExistente) {
-        await query('UPDATE tsb_pacientes SET ultimo_atendimento = ?, proximo_atendimento = ?, recorrencia_meses = ?, ultimo_procedimento = ? WHERE id = ?', 
-          [data, novoProximoStr, meses, procPrincipal, pacienteExistente.id]);
-      } else {
-        await query(`INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [paciente_nome.trim(), paciente_telefone || '', procPrincipal, procPrincipal, meses, data, data, novoProximoStr]);
-      }
-    }
-
-    res.status(201).json({ message: 'Atendimento registrado com sucesso', id: atendimentoId });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Erro ao registrar atendimento TSB' });
-  }
-});
-
-router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
-  try {
-    await garantirTabelasTsb();
-    const { id } = req.params;
-    const { paciente_nome, paciente_telefone, data, descricao, procedimentos } = req.body;
-
-    if (!paciente_nome || !data || !procedimentos || procedimentos.length === 0) {
-      return res.status(400).json({ error: 'Dados obrigatórios ausentes.' });
-    }
-
-    const valor_total = procedimentos.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
-
-    await query(
-      `UPDATE tsb_atendimentos SET paciente_nome = ?, paciente_telefone = ?, data = ?, descricao = ?, valor_total = ? WHERE id = ?`,
-      [paciente_nome.trim(), paciente_telefone || '', data, descricao || '', valor_total, id]
-    );
-
-    await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [id]);
-    for (let proc of procedimentos) {
-      await query(
-        `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
-        [id, proc.name, parseFloat(proc.value) || 0]
-      );
-    }
-
-    res.json({ message: 'Atendimento atualizado com sucesso' });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao atualizar atendimento TSB' });
-  }
-});
-
-router.delete('/atendimentos/:id', verifyTsbToken, async (req, res) => {
-  try {
-    await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [req.params.id]);
-    await query(`DELETE FROM tsb_atendimentos WHERE id = ?`, [req.params.id]);
-    res.json({ message: 'Atendimento excluído com sucesso' });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao excluir atendimento TSB' });
   }
 });
 
