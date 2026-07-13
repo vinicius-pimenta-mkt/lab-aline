@@ -8,7 +8,6 @@ const router = express.Router();
 // GARANTIA DE TABELAS E COLUNAS
 // ==========================================
 const garantirTabelasTsb = async () => {
-  // Garante a nova coluna de histórico clínico no TSB
   try { await query("ALTER TABLE tsb_pacientes ADD COLUMN ultimo_procedimento TEXT"); } catch (e) {}
   
   try {
@@ -37,9 +36,6 @@ const garantirTabelasTsb = async () => {
   }
 };
 
-// ==========================================
-// MIDDLEWARE DE SEGURANÇA
-// ==========================================
 const verifyTsbToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
@@ -55,9 +51,6 @@ const verifyTsbToken = (req, res, next) => {
   }
 };
 
-// ==========================================
-// ROTA DE LOGIN EXCLUSIVA DO TSB
-// ==========================================
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -82,7 +75,6 @@ router.post('/login', async (req, res) => {
 // GESTÃO DE PACIENTES E RECORRÊNCIAS (ABA 1)
 // =========================================================================
 
-// Listar todos os pacientes do TSB
 router.get('/', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
@@ -93,7 +85,6 @@ router.get('/', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Criar paciente do TSB
 router.post('/', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
@@ -110,12 +101,12 @@ router.post('/', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Atualizar dados cadastrais do paciente TSB (Edição da Aba 1)
+// --- ATUALIZAÇÃO IMPORTANTE: SINCRONIZAÇÃO AUTOMÁTICA COM O FINANCEIRO AO EDITAR ---
 router.put('/:id', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
     const { id } = req.params;
-    const { nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
+    const { nome, telefone, procedimento, ultimo_procedimento, ultimo_procedimento_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
 
     if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
 
@@ -127,6 +118,23 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
       [nome.trim(), telefone || '', procedimento, ultimo_procedimento || '', recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
     );
 
+    // Se a Aline inseriu um "Último Procedimento", o sistema injeta no relatório financeiro automaticamente
+    if (ultimo_procedimento && ultimo_atendimento) {
+      const atFinan = await get('SELECT id FROM tsb_atendimentos WHERE paciente_nome = ? AND data = ?', [nome.trim(), ultimo_atendimento]);
+      
+      if (!atFinan) {
+        const valor = ultimo_procedimento_valor || 0;
+        const resAt = await query(
+          `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
+          [nome.trim(), telefone || '', ultimo_atendimento, 'Importado do Histórico de Retornos', valor]
+        );
+        await query(
+          `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+          [resAt.lastID, ultimo_procedimento, valor]
+        );
+      }
+    }
+
     res.json({ message: 'Paciente atualizado com sucesso' });
   } catch (error) {
     console.error(error);
@@ -134,7 +142,6 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Rota para Renovar 1 Clique
 router.put('/:id/renovar', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
@@ -160,7 +167,6 @@ router.put('/:id/renovar', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Rota para Apagar Paciente
 router.delete('/:id', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
@@ -179,7 +185,6 @@ router.delete('/:id', verifyTsbToken, async (req, res) => {
 // GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2)
 // =========================================================================
 
-// Listar atendimentos financeiros
 router.get('/atendimentos', verifyTsbToken, async (req, res) => {
   try {
     await garantirTabelasTsb();
@@ -204,7 +209,6 @@ router.get('/atendimentos', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Registrar atendimento com múltiplos procedimentos e automação de retorno
 router.post('/atendimentos', verifyTsbToken, async (req, res) => {
   try {
     await garantirTabelasTsb();
@@ -222,7 +226,6 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
     );
     const atendimentoId = result.lastID;
 
-    // Define qual foi o procedimento principal para registrar no histórico
     const procPrincipal = procedimentos[0]?.name || 'Prevenção / Rotina';
 
     for (let proc of procedimentos) {
@@ -232,7 +235,6 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
       );
     }
 
-    // AUTOMATIZAÇÃO DO CONTROLE DE RETORNOS (ABA 1)
     if (proximo_retorno_meses && parseInt(proximo_retorno_meses) > 0) {
       const meses = parseInt(proximo_retorno_meses);
       const dataUltimo = new Date(data + 'T00:00:00');
@@ -258,7 +260,6 @@ router.post('/atendimentos', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Editar Atendimento TSB
 router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   try {
     await garantirTabelasTsb();
@@ -290,7 +291,6 @@ router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   }
 });
 
-// Excluir Atendimento TSB
 router.delete('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   try {
     await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [req.params.id]);
