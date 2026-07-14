@@ -74,7 +74,7 @@ router.post('/login', async (req, res) => {
 
 
 // =========================================================================
-// GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2) - Colocadas acima para não conflitar
+// GESTÃO FINANCEIRA E ATENDIMENTOS TSB (ABA 2)
 // =========================================================================
 
 router.get('/atendimentos', verifyTsbToken, async (req, res) => {
@@ -183,7 +183,6 @@ router.put('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   }
 });
 
-// A rota de deletar foi ajustada para não sofrer colisão com a deleção de pacientes
 router.delete('/atendimentos/:id', verifyTsbToken, async (req, res) => {
   try {
     await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [req.params.id]);
@@ -210,23 +209,47 @@ router.get('/', verifyTsbToken, async (req, res) => {
   }
 });
 
+// Criar novo Paciente e Sincronizar com o Financeiro
 router.post('/', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
-    const { nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
+    const { nome, telefone, procedimento, procedimentos_realizados, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento } = req.body;
     if (!nome) return res.status(400).json({ error: 'Nome é obrigatório' });
 
+    let ultimo_proc_str = "";
+    let ultimo_valor = 0;
+
+    if (procedimentos_realizados && procedimentos_realizados.length > 0) {
+      ultimo_proc_str = procedimentos_realizados.map(p => p.name).join(', ');
+      ultimo_valor = procedimentos_realizados.reduce((acc, curr) => acc + (parseFloat(curr.value) || 0), 0);
+    }
+
     const result = await query(
-      `INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [nome.trim(), telefone || '', procedimento || '', ultimo_procedimento || '', recorrencia_meses || 6, data_inicio, ultimo_atendimento, proximo_atendimento]
+      `INSERT INTO tsb_pacientes (nome, telefone, procedimento, ultimo_procedimento, ultimo_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [nome.trim(), telefone || '', procedimento || '', ultimo_proc_str, ultimo_valor, recorrencia_meses || 6, data_inicio, ultimo_atendimento, proximo_atendimento]
     );
+
+    // SINCRONIZAÇÃO AUTOMÁTICA AO CRIAR
+    if (procedimentos_realizados && procedimentos_realizados.length > 0 && ultimo_atendimento) {
+      const resAt = await query(
+        `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
+        [nome.trim(), telefone || '', ultimo_atendimento, 'Criado e Sincronizado da Aba de Recorrência', ultimo_valor]
+      );
+      for (let p of procedimentos_realizados) {
+        await query(
+          `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+          [resAt.lastID, p.name, parseFloat(p.value)]
+        );
+      }
+    }
+
     res.status(201).json({ message: 'Paciente criado com sucesso', id: result.lastID });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao criar paciente TSB' });
   }
 });
 
-// Edição de Paciente com Integração aos Procedimentos Fixos e Sincronização
+// Edição de Paciente com UPSERT (Atualiza ou Insere) no Financeiro
 router.put('/:id', verifyTsbToken, async (req, res) => {
   await garantirTabelasTsb();
   try {
@@ -251,12 +274,13 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
       [nome.trim(), telefone || '', procedimento, ultimo_proc_str, ultimo_valor, recorrencia_meses, data_inicio, ultimo_atendimento, proximo_atendimento, id]
     );
 
-    // MÁGICA DE SINCRONIZAÇÃO: Se editou um atendimento, espelha no Financeiro (Aba 2)
+    // MÁGICA DE SINCRONIZAÇÃO: Se editou um atendimento, espelha ou ATUALIZA no Financeiro
     if (procedimentos_realizados && procedimentos_realizados.length > 0 && ultimo_atendimento) {
-      // Verifica se já existe um registro financeiro para este paciente nesta data
-      const atFinan = await get('SELECT id FROM tsb_atendimentos WHERE paciente_nome = ? AND data = ?', [nome.trim(), ultimo_atendimento]);
+      // Procura usando LOWER e TRIM para evitar falhas por letras maiúsculas
+      const atFinan = await get('SELECT id FROM tsb_atendimentos WHERE TRIM(LOWER(paciente_nome)) = ? AND data = ?', [nome.trim().toLowerCase(), ultimo_atendimento]);
       
       if (!atFinan) {
+        // Se NÃO encontrou, cria um novo
         const resAt = await query(
           `INSERT INTO tsb_atendimentos (paciente_nome, paciente_telefone, data, descricao, valor_total) VALUES (?, ?, ?, ?, ?)`,
           [nome.trim(), telefone || '', ultimo_atendimento, 'Sincronizado da Aba de Recorrência', ultimo_valor]
@@ -267,10 +291,23 @@ router.put('/:id', verifyTsbToken, async (req, res) => {
             [resAt.lastID, p.name, parseFloat(p.value)]
           );
         }
+      } else {
+        // Se ENCONTROU, atualiza o que já existe (corrige o problema relatado)
+        await query(
+          `UPDATE tsb_atendimentos SET valor_total = ?, paciente_telefone = ?, descricao = 'Atualizado via Aba de Recorrência' WHERE id = ?`,
+          [ultimo_valor, telefone || '', atFinan.id]
+        );
+        await query(`DELETE FROM tsb_atendimento_procedimentos WHERE atendimento_id = ?`, [atFinan.id]);
+        for (let p of procedimentos_realizados) {
+          await query(
+            `INSERT INTO tsb_atendimento_procedimentos (atendimento_id, procedimento_nome, valor) VALUES (?, ?, ?)`,
+            [atFinan.id, p.name, parseFloat(p.value)]
+          );
+        }
       }
     }
 
-    res.json({ message: 'Paciente atualizado e sincronizado' });
+    res.json({ message: 'Paciente atualizado com sucesso' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Erro ao atualizar paciente TSB' });
